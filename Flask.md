@@ -1,3 +1,14 @@
+---
+title: Flask使用教程
+date: 2025-04-11
+categories:
+ - flask
+tags:
+ - flask
+---
+
+
+
 # Flask
 
 Flask是一个用于web开发的微型框架，它具有一个包含基本服务的核心，其他功能可以通过扩展实现。
