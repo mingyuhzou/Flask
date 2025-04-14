@@ -53,6 +53,55 @@ virtualenv -p D:\python311\python.exe  venvname
 
 
 
+# 基本概念
+
+## 域名
+
+域名是网站的名字或地址，用于代替难记的IP地址
+
+## 端口号
+
+每台服务器可能同时多个服务(网页，邮件，数据库)，端口号用于指定具体的服务
+
+## Session和cookie
+
+HTTP请求是无状态协议，不保存状态
+
+`session` 允许你**在不同的请求之间存储和共享数据**。它实际上存储在服务器端，但会通过一个 cookie 在客户端传递给浏览器。
+
+通过 `session`，你可以在多个请求之间**持久化用户的状态和信息**，比如：用户名、登录状态、购物车数据等。
+
+当客户发起第一次请求时，服务器会建立与客户端的会话并将会话的唯一标识符Session ID传送给客户，服务器口语将一些信息保存在会话中，当客户第二次发起请求时会携带Session ID到服务器中，服务器通过Session ID获取会话中的信息
+
+
+
+
+
+
+
+## 跨域限制
+
+跨域限制(同源策略)防止一个网站上的脚本与另一个不同来源上的资源进行不受限制的交互
+
+不同的来源指的是协议（例如 http 或 https）、域名（例如 example.com）和端口号相同
+
+- **同源：**
+  - https://example.com/index.html 与 https://example.com/about.html
+- **不同源：**
+  - https://example.com 与 http://example.com（协议不同）
+  - https://example.com 与 https://api.example.com（子域名不同）
+  - https://example.com 与 https://example.com:8080（端口不同）
+
+
+
+## CSRF
+
+CSRF——跨站请求伪造，恶意网站通过已认证的用户浏览器在受信任站点上执行非正常操作，一般通过外部链接实现
+
+ **CSRF防护机制**会基于secret_key生成token，服务器再生成页面时会给用户一个token，在提交时用户需要携带token一起，然后服务器会检查token是否正确，外部网站是无法访问网站页面的token。
+
+
+
 # 应用基本结构
 
 ## 初始化
@@ -409,6 +458,17 @@ pip install flask-wtf
 
 
 
+ Flask-WTF 默认启用了 **CSRF防护机制**，需要给secret_key来加密，生成令牌
+
+```python
+import os 
+app.secret_key=os.urandom(24)
+```
+
+
+
+
+
 ## 表单类
 
 表单类继承FlaskForm基类，其中每个字段代表一个表单项
@@ -465,29 +525,220 @@ class InfoForm(FlaskForm):
 
 
 
+validate_on_submit会判断当前是不是POST请求，以及表单是否通过过了验证器
+
+```python
+@app.route('/',methods=['GET','POST'])
+def index():
+    name=None
+    form=NameForm()
+    if form.validate_on_submit():
+        name=form.name.data
+        form.name.data=''
+    return render_template('index.html',form=form,name=name,current_time=datetime.now(timezone.utc))
+
+```
 
 
 
+## 重定向
 
 
 
+表单提交后再次刷新浏览器会重复提交表单，浏览器会出现警告
+
+![image-20250414090216760](./assets/image-20250414090216760.png)
 
 
 
+因此对于POST操作，使用重定向作为请求的响应，但是由于HTTP协议是无状态的，即每个请求和响应都是独立的，服务器无法记住不同请求的数据，所以需要session储存数据
 
 
 
+## 闪现消息
+
+有时请求完成后需要让用户知道状态发生了变化，可以通过Flask内置的flash()实现，同时还要使用get_flashed_messages()渲染页面
+
+```python
+from flask import Flask,render_template,session,redirect,url_for,flash
+@app.route('/',methods=['GET','POST'])
+def index():
+    form=NameForm()
+    if form.validate_on_submit():
+        preName=session.get('name')
+        if preName and preName!=form.name.data:
+            flash('Looks like you have changed your name!')
+        session['name']=form.name.data
+        return redirect(url_for("index"))
+    return render_template('index.html',form=form,name=session.get('name'),current_time=datetime.now(timezone.utc))
+
+```
 
 
 
+渲染
+
+```python
+{% block content %}
+<div class="container">
+    {%for message in get_flashed_messages()%}
+    <div class="'alert alert_warning">
+        <button type="button" class="close" data-dismiss="alert">&times;</button>
+        {{message}}
+    </div>
+    {% endfor %}
+    {% block page_content %}{% endblock %}
+</div>
+{% endblock %}
+```
+
+# 数据库
+
+SQLAlchemy是pyhton中最流行的ORM框架，ORM框架指对象关系映射，将数据库表结构映射为python类。
+
+flask_sqlalchemy是一个在flask项目中使用SQLAlchemy更便捷的扩展
 
 
 
+## 初始化
+
+flask中选用SQLite数据库，**SQLite** 是一个轻量级的嵌入式的关系型数据库，它不需要独立的数据库服务器，所有的数据都保存在一个本地文件中，它是“零配置”的数据库 —— 安装 Python 后就可以直接使用。
+
+初始化
+
+```python
+basedir = os.path.abspath(os.path.dirname(__file__)) # 获取当前程序的目录
+app.config['SQLALCHEMY_DATABASE_URI'] =\
+ 'sqlite:///' + os.path.join(basedir, 'data.sqlite')# 配置数据库
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False # 不储存对象的修改信息
+db = SQLAlchemy(app)# 创建数据库实例
+```
 
 
 
+## 定义模型
+
+继承基类
+
+```python
+class Role(db.Model):
+    __tablename__='roles' # 表名
+    id=db.Column(db.Integer,primary_key=True) # 属性
+    name=db.Column(db.String(64),unique=True)
+
+    # 建立一对多关系 backref指定在User表中添加role对象 lazy设置查询返回的结果还可以继续查询
+    users = db.relationship('User', backref='role', lazy='dynamic')
+
+
+    # 用于表示对象的字符串方法
+    def __repr__(self):
+        return '<Role %r>'%self.name
+
+class User(db.Model):
+    __tablename__='User' # 表名
+    id=db.Column(db.Integer,primary_key=True) # 属性
+    username=db.Column(db.String(64),unique=True,index=True)
+
+    # 创建外键引用 roles指的是表名
+    role_id=db.Column(db.Integer,db.ForeignKey('roles.id'))
+
+    # 用于表示对象的字符串方法
+    def __repr__(self):
+        return '<Role %r>'%self.username
+```
 
 
 
+常用的列选项
+
+![image-20250414102613306](./assets/image-20250414102613306.png)
 
 
+
+## 数据库操作
+
+操作可以在flask shell中进行(避免代码重复执行)，使用exit()退出shell 
+
+### 创建表
+
+![image-20250414104209204](./assets/image-20250414104209204.png)
+
+### 插入行
+
+先创建
+
+![image-20250414110539750](./assets/image-20250414110539750.png)
+
+再插入
+
+
+
+![image-20250414110203966](./assets/image-20250414110203966.png)
+
+### 修改行
+
+修改后重新提交
+
+![image-20250414110216232](./assets/image-20250414110216232.png)
+
+### 删除行
+
+![image-20250414110237901](./assets/image-20250414110237901.png)
+
+
+
+### 查询行
+
+![image-20250414110258608](./assets/image-20250414110258608.png)
+
+![image-20250414110303640](./assets/image-20250414110303640.png)
+
+![image-20250414110348224](./assets/image-20250414110348224.png)
+
+
+
+## 集成python shell
+
+避免重复导入数据库实例与模型，可以预先配置shell
+
+```python
+# 自定义shell启动时自动导入的变量
+@app.shell_context_processor
+def make_shell_context():
+ return dict(db=db, User=User, Role=Role)
+```
+
+
+
+## 数据迁移
+
+在开发的过程中有时需要修改数据库模型，并且修改后还要更新数据库。
+
+仅当数据库表不存在时，Flask-SQLAlchemy才会更根据模型创建，因此更新表的方式就是先删除旧表，但是这样会丢失数据库一种的全部数据。
+
+另一种更新表的方式是使用数据库与迁移框架
+
+```python
+pip install flask-migrate
+```
+
+
+
+初始化
+
+```python
+from flask_migrate import Migrate
+migrate=Migrate(app,db)
+```
+
+flask db init
+
+
+
+操作方式类似于git
+
+对模型做修改，执行flask db migrate命令flask db migrate -m "initial migration"
+
+把改动应用到数据库 flask db upgrade
+
+撤销上一次改动flask db downgrade，可能会导致数据丢hi是
