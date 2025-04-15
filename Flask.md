@@ -75,10 +75,6 @@ HTTP请求是无状态协议，不保存状态
 
 
 
-
-
-
-
 ## 跨域限制
 
 跨域限制(同源策略)防止一个网站上的脚本与另一个不同来源上的资源进行不受限制的交互
@@ -209,6 +205,35 @@ Flask中的上下文能在处理请求时方便地访问应用相关的信息，
 
 
 
+
+
+视图函数中会自动推入上下文上下文，但是在单元测试/命令行脚本中需要手动加载上下文
+
+```python
+@app.route('/send')
+def send_mail():
+    # 创建邮件对象，第一个参数hi是标题，第二个参数是收件人列表
+    msg = Message('Hello from Flask',
+                  recipients=['2228632512@qq.com'])
+    # 设置邮件内容
+    msg.body = 'This is a test message sent from Flask-Mail.'
+    msg.html = '<b>This is a test message sent from Flask-Mail.</b>'
+    
+    # 创建上下文，访问到配置信息
+    with app.app_context():
+        # 发送邮件
+        mail.send(msg)
+    return '邮件发送成功！'
+```
+
+
+
+
+
+
+
+
+
 ## 请求钩子
 
 请求钩子是在请求生命周期中的某些阶段执行的函数
@@ -264,7 +289,7 @@ def index():
 
 ## Jinja2
 
-Jinja2用于将python中的数据和逻辑渲染到HTML模板中
+Jinja2用于将python中的数据和逻辑渲染到HTML(txt也可以)模板中
 
 
 
@@ -741,4 +766,317 @@ flask db init
 
 把改动应用到数据库 flask db upgrade
 
-撤销上一次改动flask db downgrade，可能会导致数据丢hi是
+撤销上一次改动flask db downgrade，可能会导致数据丢失
+
+
+
+# 电子邮件
+
+## 初始化
+
+电子邮件服务由Flask-Mail 扩展提供，使用SMTP协议将邮件交给服务器发送
+
+```python
+pip install flask-mail
+```
+
+
+
+配置，使用QQ服务器
+
+```python
+from flask_mail import Mail
+
+# 配置邮箱服务器信息
+app.config['MAIL_SERVER'] = 'smtp.qq.com'               # 邮件服务器，比如QQ邮箱
+app.config['MAIL_PORT'] = 465                           # SSL端口号
+app.config['MAIL_USE_SSL'] = True                       # 使用SSL
+app.config['MAIL_USERNAME'] = os.environ.get('MAIL_USERNAME')           # 发件人邮箱
+app.config['MAIL_PASSWORD'] = os.environ.get('MAIL_PASSWORD')   	    # 授权码  
+
+也可以自定设置一些键值对比如标题前缀...
+
+mail=Mail(app) # 注意配置写到初始化前面
+```
+
+邮箱授权码等不应直接写入代码，可以放置到环境变量中再读取
+
+
+
+QQ邮箱获取授权码方法如下
+
+![image-20250415115842870](./assets/image-20250415115842870.png)
+
+
+
+## 示例
+
+发送邮件示例
+
+```python
+def send_mail(to,subject,template,**kwargs):
+    # 创建邮件对象，第一个是标题，sender发件人，recipients收件人列表
+    msg = Message(app.config['FLASKY_MAIL_SUBJECT_PREFIX']+subject,
+                  sender=app.config['FLASKY_MAIL_SENDER'],recipients=[to])
+    # 渲染文本和HTML内容
+    msg.body=render_template(template+'.txt',**kwargs)
+    msg.html=render_template(template+'.html',**kwargs)
+    mail.send(msg)
+```
+
+
+
+## 异步发送
+
+网页如果不使用异步发送邮件，那么调用mail.send()时会卡住直到邮件发送完成
+
+```python
+def send_async_email(app,msg):
+    with app.app_context():
+        mail.send(msg)
+
+def send_email(to, subject, template, **kwargs):
+    msg = Message(app.config['FLASKY_MAIL_SUBJECT_PREFIX'] + subject,
+    sender=app.config['FLASKY_MAIL_SENDER'], recipients=[to])
+    msg.body = render_template(template + '.txt', **kwargs)
+    msg.html = render_template(template + '.html', **kwargs)
+    tr=Thread(target=send_async_email,args=[app,msg])
+    tr.start()
+    return tr
+```
+
+
+
+# 项目结构
+
+
+
+
+
+## config.py
+
+config.py是一个Python配置文件，用于集中管理应用程序的不同环境
+
+```python
+import os 
+
+basedir=os.path.abspath(os.path.dirname(__file__))
+
+# 配置基类
+class Config:
+    SECRET_KEY = os.environ.get('SECRET_KEY') or os.urandom(24)# 设置密钥
+    SQLALCHEMY_TRACK_MODIFICATIONS = False                     # 不追踪数据库修改
+
+
+    '''邮件设置 以QQ邮件服务器为例'''
+    MAIL_SERVER='smtp.qq.com'   # SMTP服务器
+    MAIL_PORT=465
+    MAIL_USE_SSL=True
+    MAIL_USERNAME=os.environ.get('MAIL_USERNAME')  # 凑够环境变量中取得
+    MAIL_PASSWORD=os.environ.get('MAIL_PASSWORD') 
+    MAIL_DEFAULT_SENDER = '2228632512@qq.com'   # 默认发送者
+    FLASKY_MAIL_SUBJECT_PREFIX = '[Flasky]' # 前缀
+    FLASKY_MAIL_SENDER = 'Flasky Admin <2228632512@qq.com>' # 发送者
+
+
+    '''数据库设置'''
+    SQLALCHEMY_DATABASE_URI='sqlite:///' + os.path.join(basedir, 'data.sqlite')
+
+    # 
+    @staticmethod
+    def init_app(app):
+        """可选：在应用创建后执行额外的初始化"""
+        pass  # 默认不执行任何操作
+# 下面是几个子类
+
+'''
+开发环境，启用调试模式
+'''
+class DevelopmentConfig(Config):
+    DEBUG = True  # 开启调试模式
+
+'''
+测试环境，使用内容数据库
+'''
+class TestingConfig(Config):
+    TESTING = True  # 启用测试模式
+    SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'  # 使用内存数据库
+
+
+'''
+生产环境，关闭调试模式
+'''
+class ProductionConfig(Config):
+    DEBUG = False  # 关闭调试模式
+
+# 配置字典
+config = {
+ 'development': DevelopmentConfig,
+ 'testing': TestingConfig,
+ 'production': ProductionConfig,
+ 'default': DevelopmentConfig
+}
+```
+
+
+
+在主程序中加载配置
+
+```python
+from flask import Flask
+from config import config  # 导入 config 字典
+
+app = Flask(__name__)
+
+app.config.from_object(config['default'])
+```
+
+
+
+## 应用包
+
+应用包存放应用的所有代码，模板静态文件(templates，statics)
+
+在单个文件中开发应用很方便，但是应用在全局作用域创建无法动态修改配置，而在测试中需要使用不同的配置，使用应用工厂函数可以延迟创建实例，在创建前自由修改配置
+
+```python
+from flask import Flask,render_template
+from flask_bootstrap import Bootstrap
+from flask_mail import Mail
+from flask_moment import Moment
+from config import config
+from flask_sqlalchemy import SQLAlchemy
+from flask import Bluuprint
+
+bootstrap=Bootstrap()
+mail=Mail()
+moment=Moment()
+db=SQLAlchemy()
+main=Bluuprint('main',__name__)
+
+def create_app(config_name):
+    app=Flask(__name__)
+    app.config.from_object(config[config_name])
+    config[config_name].init_app(app)
+
+    bootstrap.init_app(app)
+    mail.init_app(app)
+    moment.init_app(app)
+    db.init_app(app)
+
+    '''
+    添加路由和自定义的错误页面
+    '''
+
+    return app 
+```
+
+
+
+转换为应用工厂函数的操作让定义路由变得复杂了，在单脚本应用中，实例存在于全局作用域中，路由可以直接使用装饰器定义，但是用了应用工厂函数后，实例在运行时创建，只有在调用create_app后才能用装饰器定义路由，这样就太晚了。
+
+而蓝图可以解决这个问题，蓝图定义的路由和错误处理程序处于休眠状态，等主程序调用 `create_app()` 时再把这些函数“注册”上去
+
+主蓝本(app/main/\__init__.py)
+
+```python
+from flask import Blueprint
+
+# 第一个参数是蓝图的名称，第二个参数是蓝图所在的包
+main=Blueprint('main',__name__)
+
+# 能把路由和错误处理程序与蓝图关联起来，但是要在最后导入防止循环依赖
+from . import views,errors # 相对导入
+```
+
+注册主蓝本
+
+```python
+def create_app(config_name):
+    app=Flask(__name__)
+    app.config.from_object(config[config_name])
+    config[config_name].init_app(app)
+
+    bootstrap.init_app(app)
+    mail.init_app(app)
+    moment.init_app(app)
+    db.init_app(app)
+
+    '''
+    添加路由和自定义的错误页面
+    '''
+    from .main import main as main_blueprint
+    app.register_blueprint(main_blueprint)
+    return app 
+```
+
+
+
+错误处理程序(app/main/errors.py)
+
+```python
+from flask import render_template
+from . import main
+
+@main.app_errorhandler(404)
+def page_not_found(e):
+    return render_template('404.html'),404
+
+
+@main.app_errorhandler(500)
+def internal_server_error(e):
+    return render_template('500.html'),500
+```
+
+
+
+视图函数app/main/views.py，修改路由装饰器app.route->main.route，实例修改为app->current_app，url_for参数index->main.index即主蓝图的名称
+
+```python
+@main.route('/',methods=['GET','POST'])
+def index():
+    form=NameForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(username=form.name.data).first()
+        if user is None:
+            user = User(username=form.name.data)
+            db.session.add(user)
+            session['known'] = False
+            if current_app.config['MAIL_USERNAME']:
+                send_email(current_app.config['MAIL_USERNAME'], 'New User',
+        'email', user=user)
+        else:
+            session['known']=True
+        session['name']=form.name.data
+        form.name.data=''
+        return redirect(url_for('index'))
+    return render_template('index.html',form=form,name=session.get('name'),current_time=datetime.now(timezone.utc))
+
+```
+
+
+
+## 实例
+
+```python
+import os
+from app import create_app,db
+from app.models import User,Role
+from flask import Migrate
+
+app=create_app('default')
+migrate=Migrate()
+
+@app.shell_context_processor
+def make_shell_context():
+    return dict(db=db,User=User,Role=Role)
+```
+
+
+
+## 生成需求文件
+
+```python
+ pip freeze >requirements.txt
+```
+
