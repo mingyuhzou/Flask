@@ -193,23 +193,42 @@ Flask中的上下文能在处理请求时方便地访问应用相关的信息，
 
 应用上下文绑定了Flask应用实例，能够在全局范围内访问应用相关的对象
 
-+ current_app——当前正在处理请求的应用实例
-+ g——在请求期间存储临时数据
++ `current_app`——当前正在处理请求的应用实例
++ `g`——在请求期间存储临时数据
 
 
 
-请求上下文绑定了每一个HTTP请i去，确保每个请求可以访问当前请求的相关内容，比如请求的参数，头信息，cokkies
+请求上下文绑定了每一个HTTP请求，确保每个请求可以访问当前请求的相关内容，比如请求的参数，头信息，cokkies
 
 + `request`—— 包含当前请求的所有信息，如请求方法（GET、POST）、请求数据、表单数据、URL 参数等
 + `session`: 用于在多个请求之间存储和读取用户的会话数据
 
 
 
-
-
-视图函数中会自动推入上下文上下文，但是在单元测试/命令行脚本中需要手动加载上下文
+这些扩展将自己与Flask app对象绑定，其中**Bootstrap** 和 **Moment** 提供了Jinja2模板中可以直接使用的函数
 
 ```python
+moment = Moment(app)
+bootstrap.init_app(app)
+mail.init_app(app)
+moment.init_app(app)
+```
+
+因此可以直接在模板中使用
+
+```python
+{{ bootstrap.load_css() }}
+{{ bootstrap.load_js() }}
+```
+
+
+
+
+
+视图函数中会自动推入上下文，需要访问实例属性时调用current_app
+
+```python
+from flask import current_app
 @app.route('/send')
 def send_mail():
     # 创建邮件对象，第一个参数hi是标题，第二个参数是收件人列表
@@ -218,17 +237,22 @@ def send_mail():
     # 设置邮件内容
     msg.body = 'This is a test message sent from Flask-Mail.'
     msg.html = '<b>This is a test message sent from Flask-Mail.</b>'
-    
-    # 创建上下文，访问到配置信息
-    with app.app_context():
-        # 发送邮件
-        mail.send(msg)
+    	
+    current_app.config['name']....
+   
+    # 发送邮件，视图函数中自动引入上下文获取mail对象
+    mail.send(msg)
     return '邮件发送成功！'
 ```
 
 
 
+在测试脚本中请求之外需要手动创建应用上下文
 
+```python
+with app.app_context():
+    secret = current_app.config['SECRET_KEY']
+```
 
 
 
@@ -560,9 +584,13 @@ def index():
     if form.validate_on_submit():
         name=form.name.data
         form.name.data=''
-    return render_template('index.html',form=form,name=name,current_time=datetime.now(timezone.utc))
+    return 
+# 注意form传入的是实例
+render_template('index.html',form=form,name=name,current_time=datetime.now(timezone.utc))
 
 ```
+
+
 
 
 
@@ -708,7 +736,16 @@ class User(db.Model):
 
 ### 删除行
 
-![image-20250414110237901](./assets/image-20250414110237901.png)
+```shell
+>>> user = User.query.filter_by(username='alice').first()
+>>> user
+<User 'alice'>
+
+>>> db.session.delete(user)
+>>> db.session.commit()
+>>> print("已删除")
+已删除
+```
 
 
 
@@ -756,15 +793,15 @@ from flask_migrate import Migrate
 migrate=Migrate(app,db)
 ```
 
-flask db init
-
 
 
 操作方式类似于git
 
+```python
+初始化 flask db init
 对模型做修改，执行flask db migrate命令flask db migrate -m "initial migration"
-
 把改动应用到数据库 flask db upgrade
+```
 
 撤销上一次改动flask db downgrade，可能会导致数据丢失
 
@@ -836,11 +873,12 @@ def send_async_email(app,msg):
         mail.send(msg)
 
 def send_email(to, subject, template, **kwargs):
-    msg = Message(app.config['FLASKY_MAIL_SUBJECT_PREFIX'] + subject,
-    sender=app.config['FLASKY_MAIL_SENDER'], recipients=[to])
+    msg = Message(current_app.config['FLASKY_MAIL_SUBJECT_PREFIX'] + subject,
+    sender=current_app.config['FLASKY_MAIL_SENDER'], recipients=[to])
     msg.body = render_template(template + '.txt', **kwargs)
     msg.html = render_template(template + '.html', **kwargs)
-    tr=Thread(target=send_async_email,args=[app,msg])
+    # 使用多线程的时候需要_get_current_object()传入真正的实例对象
+    tr=Thread(target=send_async_email,args=[current_app._get_current_object() ,msg])
     tr.start()
     return tr
 ```
@@ -849,7 +887,34 @@ def send_email(to, subject, template, **kwargs):
 
 # 项目结构
 
+## 总体概览
 
+```python
+your_project/
+│
+├── app/
+│   ├── __init__.py         # 应用工厂，注册蓝图和扩展
+│   ├── models.py           # 数据库模型
+│   ├── email.py            # 邮件发送逻辑（如果有）
+│   ├── main/               # 一个蓝图（模块）
+│   │   ├── __init__.py     # 注册蓝图
+│   │   ├── views.py        # 路由和视图函数
+│   │   ├── forms.py        # 表单
+│   │   └── ...             # 其他
+│   └── templates/          # HTML 模板（可子目录区分模块）
+│   |    └── ...
+|   |   
+|   └── statics/            # 静态文件(CSS JS 图片 字体) 不需要服务器处理，由浏览器请求加载
+│       └── ...
+│
+├── migrations/             # flask-migrate生成的迁移目录
+│
+├── config.py               # 配置文件（你已经写好的）
+├── manage.py               # 启动入口（flask run / shell用它）
+├── requirements.txt        # 项目依赖
+└── README.md
+
+```
 
 
 
@@ -864,7 +929,7 @@ basedir=os.path.abspath(os.path.dirname(__file__))
 
 # 配置基类
 class Config:
-    SECRET_KEY = os.environ.get('SECRET_KEY') or os.urandom(24)# 设置密钥
+    SECRET_KEY = os.environ.get('SECRET_KEY') or os.urandom(24)# 设置密钥，最好是固定的
     SQLALCHEMY_TRACK_MODIFICATIONS = False                     # 不追踪数据库修改
 
 
@@ -937,7 +1002,11 @@ app.config.from_object(config['default'])
 
 应用包存放应用的所有代码，模板静态文件(templates，statics)
 
+![image-20250416144023431](./assets/image-20250416144023431.png)
+
 在单个文件中开发应用很方便，但是应用在全局作用域创建无法动态修改配置，而在测试中需要使用不同的配置，使用应用工厂函数可以延迟创建实例，在创建前自由修改配置
+
+app.\__init__
 
 ```python
 from flask import Flask,render_template
@@ -946,13 +1015,13 @@ from flask_mail import Mail
 from flask_moment import Moment
 from config import config
 from flask_sqlalchemy import SQLAlchemy
-from flask import Bluuprint
+from flask_migrate import Migrate
 
 bootstrap=Bootstrap()
 mail=Mail()
 moment=Moment()
 db=SQLAlchemy()
-main=Bluuprint('main',__name__)
+migrate=Migrate()
 
 def create_app(config_name):
     app=Flask(__name__)
@@ -963,11 +1032,10 @@ def create_app(config_name):
     mail.init_app(app)
     moment.init_app(app)
     db.init_app(app)
-
+    migrate.init_app(app,db)
     '''
     添加路由和自定义的错误页面
     '''
-
     return app 
 ```
 
@@ -975,7 +1043,7 @@ def create_app(config_name):
 
 转换为应用工厂函数的操作让定义路由变得复杂了，在单脚本应用中，实例存在于全局作用域中，路由可以直接使用装饰器定义，但是用了应用工厂函数后，实例在运行时创建，只有在调用create_app后才能用装饰器定义路由，这样就太晚了。
 
-而蓝图可以解决这个问题，蓝图定义的路由和错误处理程序处于休眠状态，等主程序调用 `create_app()` 时再把这些函数“注册”上去
+而蓝图可以解决这个问题，蓝图定义的路由和错误处理程序处于休眠状态，等主程序调用 `create_app()` 时会把这些函数“注册”上去
 
 主蓝本(app/main/\__init__.py)
 
@@ -989,28 +1057,7 @@ main=Blueprint('main',__name__)
 from . import views,errors # 相对导入
 ```
 
-注册主蓝本
-
-```python
-def create_app(config_name):
-    app=Flask(__name__)
-    app.config.from_object(config[config_name])
-    config[config_name].init_app(app)
-
-    bootstrap.init_app(app)
-    mail.init_app(app)
-    moment.init_app(app)
-    db.init_app(app)
-
-    '''
-    添加路由和自定义的错误页面
-    '''
-    from .main import main as main_blueprint
-    app.register_blueprint(main_blueprint)
-    return app 
-```
-
-
+主蓝图下的视图函数和错误处理程序
 
 错误处理程序(app/main/errors.py)
 
@@ -1056,6 +1103,35 @@ def index():
 
 
 
+注册主蓝本
+
+```python
+def create_app(config_name):
+    app=Flask(__name__)
+    app.config.from_object(config[config_name])
+    config[config_name].init_app(app)
+
+    bootstrap.init_app(app)
+    mail.init_app(app)
+    moment.init_app(app)
+    db.init_app(app)
+
+    '''
+    添加路由和自定义的错误页面
+    '''
+    from .main import main as main_blueprint
+    app.register_blueprint(main_blueprint)
+    
+    
+    from .auth import auth as auth_blueprint    
+	app.register_blueprint(auth_blueprint,url_prefix='/auth') # url_prefix给蓝图下的路由加上公共前缀
+    return app 
+```
+
+
+
+
+
 ## 实例
 
 ```python
@@ -1079,4 +1155,176 @@ def make_shell_context():
 ```python
  pip freeze >requirements.txt
 ```
+
+
+
+# 用户身份验证
+
+
+
+## 密码
+
+保证密码的安全性关键不在于存储密码本身，而是存储密码的散列值，计算密码散列值的函数接受密码作为输入，添加随即内容之后使用多种单向加密算法转换密码，最终得到一个和原始密码没有关系的字符序列，且无法还原成原始密码，核对密码时再次计算散列值(因为转换函数是可以复现的)，这样就可以储存散列密码以代替原始密码。
+
+使用Werkzeug扩展来实现
+
+```python
+pip install Werkzeug
+```
+
+重新定义模型，添加密码字段
+
+```python
+from  werkzeug.security import generate_password_hash,check_password_hash
+
+class User(db.Model):
+    __tablename__='User' # 表名
+    id=db.Column(db.Integer,primary_key=True) # 属性
+    username=db.Column(db.String(64),unique=True,index=True)
+    password_hash=db.Column(db.String(128))
+    # 创建外键引用 roles指的是表名
+    role_id=db.Column(db.Integer,db.ForeignKey('roles.id'))
+
+    # 用于表示对象的字符串方法
+    def __repr__(self):
+        return '<User %r>'%self.username
+    
+    '''
+    @property装饰器将方法伪装为属性，当有人访问password时，会
+    触发异常
+    '''
+    @property
+    def password(self):
+        raise AttributeError("password is not a readabel attribute")
+    
+    '''@password.setter与@property需成对出现 当有人设置password时调用此方法加密'''
+    @password.setter
+    def password(self,password):
+        self.password_hash=generate_password_hash(password)
+
+    def verify_password(self,password):
+        return check_password_hash(self.password_hash,password)
+    
+```
+
+## 验证身份
+
+使用Flask-Login 扩展
+
+```python
+pip install flask-login
+```
+
+
+
+Flask-Login 需要应用中由User对象，且User模型必须实现以下的属性和方法
+
+![image-20250416143522502](./assets/image-20250416143522502.png)
+
+
+
+可以继承满足大部分需求
+
+```python
+from flask_login import UserMixin
+class User(db.Model,UserMixin):
+```
+
+
+
+匿名用户尝试访问受保护的页面时，Flask-Login将重定向到登录页面
+
+`app/__init__.py`
+
+```python
+from flask_login import LoginManager
+login_manager = LoginManager()
+login_manager.login_view = 'auth.login' # login由蓝图auth定义，所以要加上蓝图的名称
+def create_app(config_name):
+ # ...
+ login_manager.init_app(app)
+ # ...
+```
+
+
+
+Flask-Login需要指定一个函数用于获取用户信息
+
+`app/models.py`
+
+```python
+from . import login_manager
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+```
+
+## 保护路由
+
+![image-20250416151137665](./assets/image-20250416151137665.png)
+
+使用login_requeired装饰器的函数会判断current_ user.is_authenticated表达式的结果是否为 True
+
+## 添加登录表单
+
+```python
+class LoginForm(FlaskForm):
+    email=StringField('Email',validators=[DataRequired(),Length(1,64),Email()])
+    password=PasswordField('Password',validators=[DataRequired()])
+    remeber_me=BooleanField('Keep me logged in ')
+    submit=SubmitField('Login in')
+```
+
+
+
+添加登入登出按钮， current_user是Flask-Login 定义的，模板中自动加载
+
+![image-20250416152219091](./assets/image-20250416152219091.png)
+
+## 登录
+
+```python
+from flask import render_template,redirect,url_for,flash,request
+@auth.route('/login',methods=['POST','GET'])
+def login():
+    form=LoginForm()
+    # 是否有提交
+    if form.validate_on_submit():
+        # 查询
+        user=User.query.fliter_by(email=form.email.data).first()
+        # 通过验证
+        if user and user.verify_password(form.password.data):
+            # 用户访问未授权的URL时会显示登录表单，原URL会保存在next参数中
+            next=request.args.get('next')
+            # 不存在则重定向到首页
+            if next or next.startwith('/'):
+                next=url_for('main.index')
+            return redirect(next)
+        flash('Invalid username or password')
+    return render_template('auth/login.html',form=form)
+```
+
+
+
+## 登出
+
+logout_user会删除并重设用户会话
+
+```python
+from flask_login import login_required,logout_user
+@auth.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    flash('you have logged out')
+    return redirect(url_for('.main.index'))
+```
+
+
+
+## Flask-Login运行机制
+
+在login_view指定的路由处，提交表单调用Flask-Login的login_user()函数登入用户，该函数将用户ID以字符串形式写入到用户会话，之后会重定向到其他页面。
+
+在其他页面渲染时会使用Flask-Login的current_user，说先会调用Flask-Login内部的_get_user() 函数找出用户，\_get_user() 检查用户会话中有没有用户ID，如果没有返回一个Flask-Login的AnonymousUser 实例，反之使用user_loader装饰器注册的函数传入用户ID，加载用户对象并返回。
 
