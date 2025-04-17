@@ -209,6 +209,7 @@ moment = Moment(app)
 bootstrap.init_app(app)
 mail.init_app(app)
 moment.init_app(app)
+db.init_app(app) # 将数据可模型加载到上下文中
 ```
 
 因此可以直接在模板中使用
@@ -308,11 +309,31 @@ def index():
 
 # 模板
 
+
+
+模板中可以访问到render_template传入的变量，上下文中注入的变量，以及自行注入的变量
+
+
+
+对于模板中经常需要用到的变量，可以自行注入。flask每次渲染模板时，都会自动调用所有注册的 `context_processor`函数，将它们返回的字典合并进模板上下文。
+
+```python
+# 蓝图中注册，只能在该蓝图渲染的模板中使用
+@main.app_context_processor
+def inject_permissions():
+	return dict(Permission=Permission)
+
+# 全局注册
+@app.context_processor
+def inject_permissions():
+    return dict(Permission=Permission)
+```
+
+
+
 ## Jinja2
 
 Jinja2用于将python中的数据和逻辑渲染到HTML(txt也可以)模板中
-
-
 
 变量输出
 
@@ -1781,6 +1802,171 @@ def change_email(token):
         flash('Invalid request')
     return redirect(url_for('main.index'))
 ```
+
+
+
+
+
+# 用户角色
+
+用户在数据库中需要分配不同的角色
+
+## 模型
+
+角色模型中用permission表示用户的权限
+
+权限值设置2的幂次，这样权限在组合后的值仍是唯一的
+
+![image-20250417141035013](./assets/image-20250417141035013.png)
+
+```python
+class Permission:
+    Follow=1
+    COMMENT=2
+    WRITE=4
+    MODERATE=8
+    ADMIN=16
+```
+
+
+
+```python
+class Role(db.Model):
+    ...
+    # 是否是默认角色，只应有一个为True
+    default=db.Column(db.Boolean,default=False,index=True)
+    # 在定义时设置默认值，只有在添加到数据库后才会设置值，不方便做计算
+    permissions=db.Column(db.Integer)
+	
+    def __init__(self,**kwargs):
+        # 父类的构造函数
+        super(Role,self).__init__(**kwargs)
+        # 将权限的初始话放到构造函数中
+        if not self.permissions:
+            self.permissions=0
+    ...
+    
+    def has_permission(self,perm):
+        return self.permissions&perm==perm
+
+    def add_permission(self,perm):
+        if not self.has_permission(perm):
+            self.permissions+=perm
+    def remove_permission(self,perm):
+        if self.has_permission(perm):
+            self.permissions-=perm
+    def reset_permission(self):
+        self.permissions=0
+
+    # 将预定义的角色及其权限写入到数据库，模型出现改动后，调用该方法更新橘色
+    @staticmethod
+    def insert_roles():
+        roles={'User':[Permission.FOLLOW,Permission.COMMENT,Permission.WRITE ],
+               'Moderator':[Permission.FOLLOW,Permission.COMMENT,Permission.WRITE,Permission.MODERATE],
+               'Administrator':[Permission.FOLLOW,Permission.COMMENT,Permission.WRITE,Permission.MODERATE,Permission.ADMIN],
+               }
+        default_role='User'
+        for r in roles:
+            role=Role.query.filter_by(name=r).first()
+            # 不存在则新建
+            if not role:
+                role=Role(name=r)
+            role.reset_permission()
+            for perm in roles[r]:
+                role.add_permission(perm)
+            # 将user设置为默认角色
+            role.default=(role.name==default_role)
+            db.session.add(role)
+        db.session.commit()
+```
+
+
+
+## 赋予角色
+
+管理员用户在注册时应该被赋予管理员权限，初始化时判断注册的邮箱是否在FLASKY_ADMIN中
+
+```python
+def __init__(self,**kwargs):
+    super(User,self).__init__(**kwargs)
+    if self.role is None:
+        if self.email in current_app.config['FLASKY_ADMIN']:
+            self.role=Role.query.filter_by(name='Administrator').first()
+        else:
+            self.role=Role.query.filter_by(default=True).first()
+```
+
+
+
+
+
+## 用户检验
+
+需要经常检验用户是否拥有某项权限
+
+```python
+class User(UserMixin, db.Model):
+     # ...
+     def can(self, perm):
+     return self.role is not None and self.role.has_permission(perm)
+     def is_administrator(self):
+     return self.can(Permission.ADMIN)
+```
+
+
+
+定义匿名用户类
+
+```python
+from flask_login import  AnonymousUserMixin
+class AnonymousUser(AnonymousUserMixin):
+    def can(self, permissions):
+        return False
+    def is_administrator(self):
+        return False
+login_manager.anonymous_user = AnonymousUser
+```
+
+
+
+想要让视图函数只对具有特定权限的用户开放，可以使用自定义的装饰器
+
+`app/decorators.py`
+
+```python
+from functools import wraps
+from flask import abort
+from flask_login import current_user
+from .models import Permission
+
+# 权限装饰器，带参数的装饰器要用装饰器的装饰器
+def permission_required(permission):
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args,**kwargs):
+            if not current_user.can(permission):
+                abort(403)
+            return f(*args,**kwargs)
+        return decorated_function
+    return decorator
+
+def admin_required(f):
+    return permission_required(Permission.ADMIN)(f)
+```
+
+
+
+在视图函数上使用多个装饰器时应把route放在首位，剩下的装饰器按照视图函数的执行顺序排列
+
+```python
+@main.route('/moderate')
+@login_required
+@permission_required(Permission.MODERATE)
+def for_moderators_only():
+ return "For comment moderators!"
+```
+
+
 
 
 
