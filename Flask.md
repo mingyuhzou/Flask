@@ -163,23 +163,20 @@ flask run --host=0.0.0.0 --port=8080 --debug
 
 
 
-这些参数可以在根目录下创建.flaskenv
+这些参数可以在根目录下创建.flaskenv存在，在启动程序时自动读取
 
 ```python
 FLASK_APP=app.py            # 指定Flask入口文件
 FLASK_ENV=development       # 设置运行环境：开发（development）或生产（production）
 FLASK_DEBUG=1               # 是否开启调试模式（1 开启，0 关闭
+SECRET_KEY=''               # 应用的主钥匙，用于加密session，CSRF ，flash 
 ```
 
-
-
-使用前需安装插件
+需安装插件
 
 ```python
 pip install python-dotenv
 ```
-
-再执行flask run时可以自动读取配置
 
 
 
@@ -418,7 +415,7 @@ url_for()接受视图函数的名称，返回对应的url
 
 ```python
 url_for('index') # 返回/
-url_for('index', _external=True) # 返回 _external返回绝对路径
+url_for('index', _external=True) # 返回 _external生成的 URL 会包含完整的协议、域名和端口
 url_for('user', name='John') # 接收参数，返回/user/John
 url_for('user', name='john', page=2, version=1) # 不仅限于动态路由中的参数，/user/john?page=2&version=1
 ```
@@ -511,7 +508,7 @@ pip install flask-wtf
 
 ```python
 import os 
-app.secret_key=os.urandom(24)
+app.secret_key=os.urandom(24) # 最好是一个从环境变量中读取的固定值
 ```
 
 
@@ -528,7 +525,7 @@ from wtforms import StringField,SubmitField # 文本框，提交按钮
 from wtforms.validators import DataRequired # 验证器，确保输入不为空
 
 class NameForm(FlaskForm):
-    # validators指定一个有验证函数组成的列表 第一个参数为label——表单中显示的标签文字
+    # validators验证函数组成的列表 第一个参数为label——表单中显示的标签文字
     name=StringField('What is your name?', validators=[DataRequired()])
     submit=SubmitField('Submit')
     
@@ -548,6 +545,40 @@ class InfoForm(FlaskForm):
 验证函数
 
 ![image-20250411132215826](./assets/image-20250411132215826.png)
+
+邮件验证器需要安装扩展
+
+```python
+pip install email-validator
+```
+
+
+
+```python
+# 验证两次密码是否一致，如果不一致
+password=PasswordField('Password',validators=[DataRequired(),EqualTo('password2',\
+        message='Passwords must match')])
+
+# 邮件格式字段
+email=StringField('Email',validators=[DataRequired(),Length(1,64),Email()])
+
+# 用户名需满足正则表达式，Regexp(正则表达式，标志位:0不忽略大小写，不匹配多行,错误提示信息 )
+username=StringField('Username',validators=[DataRequired(),Regexp('^[A-Za-z][A-Za-z._]*$'),0,'Usernames must have only letters, numbers, \
+                                                dots or underscores'])
+```
+
+
+
+以`validate_字段名`命名的函数是自定义验证方法，会用于验证字段
+
+```python
+from wtforms import ValidationError
+def validate_email(self, field):
+	if User.query.filter_by(email=field.data).first():
+ 		raise ValidationError('Email already registered.')
+```
+
+
 
 
 
@@ -610,26 +641,18 @@ render_template('index.html',form=form,name=name,current_time=datetime.now(timez
 
 ## 闪现消息
 
-有时请求完成后需要让用户知道状态发生了变化，可以通过Flask内置的flash()实现，同时还要使用get_flashed_messages()渲染页面
+有时请求完成后需要让用户知道状态发生了变化，可以通过Flask内置的flash()实现，必须配合模板中的 `get_flashed_messages()`
+
+第一个参数是消息，第二个参数是消息类别('success'`、`'error'`、`'warning')，默认是'message'
 
 ```python
-from flask import Flask,render_template,session,redirect,url_for,flash
-@app.route('/',methods=['GET','POST'])
-def index():
-    form=NameForm()
-    if form.validate_on_submit():
-        preName=session.get('name')
-        if preName and preName!=form.name.data:
-            flash('Looks like you have changed your name!')
-        session['name']=form.name.data
-        return redirect(url_for("index"))
-    return render_template('index.html',form=form,name=session.get('name'),current_time=datetime.now(timezone.utc))
-
+from flask import flash
+flash('Registration successful!', 'success')
 ```
 
 
 
-渲染
+Flask会把消息临时存在session里(需设置SECRET_KEY)，然后在下一次渲染是可以通过get_flashed_messages()获取
 
 ```python
 {% block content %}
@@ -749,11 +772,40 @@ class User(db.Model):
 
 
 
+### 清空表
+
+```python
+# 删除 User 表中的所有数据
+db.session.query(User).delete()
+
+# 删除 Role 表中的所有数据
+db.session.query(Role).delete()
+
+# 提交更改
+db.session.commit()
+```
+
+
+
 ### 查询行
 
-![image-20250414110258608](./assets/image-20250414110258608.png)
+query是SQLAlchemy中的基础查询方法，它返回的对象可以进一步链式调用，支持 QLAlchemy 的各种查询方法，如 `filter()`, `filter_by()`, `order_by()`, `limit()` 等，filter_by是简化的查询方法只支持等值查询，filter支持更多的操作(in() like() > <)
 
-![image-20250414110303640](./assets/image-20250414110303640.png)
+```python
+# 查询 User 表中的所有记录
+users = db.session.query(User).all()
+
+# 查询 User 表中符合特定条件的记录
+users = db.session.query(User).filter(User.age > 18).all()
+
+# 使用多个条件
+users = db.session.query(User).filter(User.age > 18, User.username == 'john').all()
+
+# 排序
+users = db.session.query(User).order_by(User.age.desc()).all()
+```
+
+
 
 ![image-20250414110348224](./assets/image-20250414110348224.png)
 
@@ -799,7 +851,7 @@ migrate=Migrate(app,db)
 
 ```python
 初始化 flask db init
-对模型做修改，执行flask db migrate命令flask db migrate -m "initial migration"
+对模型做修改，flask db migrate -m "initial migration"
 把改动应用到数据库 flask db upgrade
 ```
 
@@ -1217,7 +1269,7 @@ pip install flask-login
 
 
 
-Flask-Login 需要应用中由User对象，且User模型必须实现以下的属性和方法
+Flask-Login 需要应用中有User对象，且User模型必须实现以下的属性和方法
 
 ![image-20250416143522502](./assets/image-20250416143522502.png)
 
@@ -1283,21 +1335,23 @@ class LoginForm(FlaskForm):
 
 ## 登录
 
+![image-20250417125252257](./assets/image-20250417125252257.png)
+
 ```python
-from flask import render_template,redirect,url_for,flash,request
 @auth.route('/login',methods=['POST','GET'])
 def login():
     form=LoginForm()
     # 是否有提交
     if form.validate_on_submit():
         # 查询
-        user=User.query.fliter_by(email=form.email.data).first()
+        user=User.query.filter_by(email=form.email.data).first()
         # 通过验证
         if user and user.verify_password(form.password.data):
+            login_user(user) # 把用户信息储存到session,这样用户才能被识别登录状态
             # 用户访问未授权的URL时会显示登录表单，原URL会保存在next参数中
             next=request.args.get('next')
             # 不存在则重定向到首页
-            if next or next.startwith('/'):
+            if not next or next.startwith('/'):
                 next=url_for('main.index')
             return redirect(next)
         flash('Invalid username or password')
@@ -1324,7 +1378,411 @@ def logout():
 
 ## Flask-Login运行机制
 
-在login_view指定的路由处，提交表单调用Flask-Login的login_user()函数登入用户，该函数将用户ID以字符串形式写入到用户会话，之后会重定向到其他页面。
+提交表单调用Flask-Login的login_user()函数将用户ID以字符串形式写入到用户会话，之后会重定向到其他页面。
 
-在其他页面渲染时会使用Flask-Login的current_user，说先会调用Flask-Login内部的_get_user() 函数找出用户，\_get_user() 检查用户会话中有没有用户ID，如果没有返回一个Flask-Login的AnonymousUser 实例，反之使用user_loader装饰器注册的函数传入用户ID，加载用户对象并返回。
+在其他页面渲染时会使用Flask-Login的current_user，首先会调用Flask-Login内部的_get_user() 函数找出用户，\_get_user() 检查用户会话中有没有用户ID，如果没有返回一个Flask-Login的AnonymousUser 实例，反之使用user_loader装饰器注册的函数传入用户ID，加载用户对象并返回。
+
+
+
+## 注册表单
+
+```python
+from flask_wtf import FlaskForm
+from wtforms import StringField,SubmitField,PasswordField,BooleanField
+from wtforms.validators import DataRequired,Email,Length,Regexp,EqualTo
+from wtforms import ValidationError
+from ..models import User
+
+class RegistrationForm(FlaskForm):
+    # 邮箱
+    email=StringField('Email',validators=[DataRequired(),Length(1,64),Email()])
+    # 用户名，规定了字符组成
+    username=StringField('Username',validators=[DataRequired(),Regexp('^[A-Za-z][A-Za-z._]*$'),0,'Usernames must have only letters, numbers, \
+                                                dots or underscores'])
+    # 密码有二次确认
+    password=PasswordField('Password',validators=[DataRequired(),EqualTo('password2',\
+        message='Passwords must match')])
+    password2=PasswordField('Password2',validators=[DataRequired(),])
+    submit=SubmitField('Register')
+
+    # 验证函数 验证密码和邮箱是否已经被使用过
+    def validate_email(self,field):
+        if User.query.filter_by(email=field.data).first():
+            raise ValidationError('Email already registered')
+    
+    def validate_username(self,field):
+        if User.query.filter_by(username=field.data).first():
+            raise ValidationError('Username already in use')
+```
+
+
+
+## 代理对象
+
+```python
+from flask_login import current_user
+```
+
+用于获取当前登录用户，如果用户已登录则返回User对象，反之返回匿名用户对象AnonymousUserMixin
+
+| 属性/方法                       | 说明                                              |
+| :------------------------------ | :------------------------------------------------ |
+| `current_user.is_authenticated` | 如果用户已登录返回 `True`，否则返回 `False`。     |
+| `current_user.is_active`        | 如果用户账户是活跃的（未被禁用）返回 `True`。     |
+| `current_user.is_anonymous`     | 如果是匿名用户（未登录）返回 `True`。             |
+| `current_user.get_id()`         | 返回用户的唯一标识（通常是 `id`），用于加载用户。 |
+
+
+
+
+
+
+
+## 确认账户
+
+通过邮件确认
+
+![image-20250417125228573](./assets/image-20250417125228573.png)
+
+在模型中添加一个验证字段，模型中添加生成和检验令牌的方法
+
+```python
+from itsdangerous import URLSafeTimedSerializer as Serializer
+class User(db.Model,UserMixin):
+    confirmed=db.Column(db.Boolean,default=False)
+
+    def generate_confirmation_token(self,expiration=3600):
+        '''
+        Serializer用于生成和验证加密令牌 secret_key密钥，salt盐值 防止生成相同的签名
+        '''
+        s=Serializer(current_app.config["SECRET_KEY"],'confirmation')
+        # dumps接受要加密的数据，把用户的ID作为加密数据，返回字符串
+        return s.dumps({'confirm':self.id})
+
+    def confirm(self,token,max_age=3600):
+        # 解密时，要用相同参数的Serializer
+        s=Serializer(current_app.config["SECRET_KEY"],'confirmation')
+        try:
+            # loads接受令牌并检验令牌的有效性，max_age设置有效时间
+            data=s.loads(token.encode('utf-8'),max_age=max_age)
+        except Exception as e:
+            print(e)
+            return False
+        # 不匹配
+        print(data.get('confirm'))
+        if data.get('confirm')!=self.id:
+            return False
+        # 修改确认字段
+        self.confirmed=True
+        db.session.add(self)
+        return True 
+```
+
+
+
+注册视图函数
+
+```python
+@auth.route('/register',methods=['GET','POST'])
+def register():
+    form=RegistrationForm()
+    if form.validate_on_submit():
+        # 创建用户
+        user=User(email=form.email.data,username=form.username.data,password=form.password.data)
+        # 先提交，因为token需要用户的id
+        db.session.add(user)
+        db.session.commit()
+        # 生成token
+        token=user.generate_confirmation_token()
+        # 发送确认邮件
+        send_email(user.email,'Confirm you Accout','auth/email/confirm',user=user,token=token)
+        flash('A confirmation email has been sent to you by email.')
+        return redirect(url_for('auth.login'))
+    return render_template('auth/register.html',form=form)
+```
+
+
+
+模板
+
+url_for需要完整，且带上token
+
+```html
+<p>Dear {{ user.username }},</p>
+<p>Welcome to <b>Flasky</b>!</p>
+<p>To confirm your account please <a href="{{ url_for('auth.confirm', token=token, _external=True) }}">click here</a>.</p>
+<p>Alternatively, you can paste the following link in your browser's address bar:</p>
+<p>{{ url_for('auth.confirm', token=token, _external=True) }}</p>
+<p>Sincerely,</p>
+<p>The Flasky Team</p>
+<p><small>Note: replies to this email address are not monitored.</small></p>
+```
+
+
+
+
+
+确认视图函数
+
+```python
+@auth.route('/confirm/<token>')
+@login_required # 需要先登录(因为允许未确认的用户访问不重要的页面)
+def confirm(token):
+    # 如果已经确认过了，重定向
+    if current_user.confirmed:
+        return redirect(url_for('main.index'))
+    # 成功确认，重定向
+    if current_user.confirm(token):
+        db.session.commit()
+        flash('You have confirmed your account! Thanks')
+    else:
+        flash('The confirmation link is invlaid or has expired')
+    return redirect(url_for('main.index'))
+```
+
+
+
+允许未确认的用户登录但只显示一个页面(unconfirmed)，使用生命周期钩子
+
+```python
+@auth.before_app_request
+def before_request():
+    # 已登录未确认，不在访问验证蓝图，也不是对静态文件的请求，则拦截
+    if current_user.is_authenticated \
+        and not current_user.confirmed \
+        and request.blueprint != 'auth' \
+        and request.endpoint != 'static':
+        return redirect(url_for('auth.unconfirmed'))
+```
+
+未确认用户只能访问主页
+
+```python
+@auth.route('/unconfirmed')
+def unconfirmed():
+    if  current_user.is_anonymous or current_user.confirmed:
+        return redirect(url_for('main.index'))
+    return render_template('auth/unconfirmed.html')
+```
+
+
+
+重发确认邮件
+
+```python
+@auth.route('/confirm')
+def resend_confirmation():
+    token=current_user.generate_confirmation_token()
+    send_email(current_user.email,'Confirm you Accout','auth/email/confirm',user=current_user,token=token)
+    flash('A confirmation email has been sent to you by email.')
+    return redirect(url_for('main.index'))
+```
+
+
+
+## 修改密码
+
+![image-20250417125151682](./assets/image-20250417125151682.png)
+
+在auth下进行
+
+```python
+class ChangePasswordForm(FlaskForm):
+    old_password=PasswordField('Old password',validators=[DataRequired()])
+    password=PasswordField('Password',validators=[DataRequired(),EqualTo('password2',\
+        message='Passwords must match')])
+    password2=PasswordField('Password2',validators=[DataRequired(),])
+    submit=SubmitField('Update password')
+
+@auth.route('/change-password',methods=['POST','GET'])
+@login_required
+def change_password():
+    # 表单
+    form=ChangePasswordForm()
+    if form.validate_on_submit():
+        # 如果旧密码输入正确
+        if current_user.verify_password(form.old_password.data):
+            # 提交修改
+            current_user.password=form.password.data
+            db.session.add(current_user)
+            db.session.commit()
+            flash('Your password has been updated')
+            return redirect(url_for('main.index'))
+        else:
+            flash('Invalid password')
+    return render_template('auth/change_password.html',form=form)
+```
+
+
+
+## 重设密码
+
+![image-20250417125205027](./assets/image-20250417125205027.png)
+
+![image-20250417125210100](./assets/image-20250417125210100.png)
+
+在登陆页面选择重设密码->password_reset_request处提交email，如果email存在会发送携带token的邮件->点击邮件链接，验证token，如果正确则重设密码，返回登陆页面。
+
+
+
+token中带有用户的唯一id,，修改User模型
+
+```python
+class User(db.Model,UserMixin):
+    ...
+    def generate_reset_token(self):
+        s=Serializer(current_app.config["SECRET_KEY"],'confirmation')
+        return s.dumps({'reset':self.id})
+    
+    # 静态方法不依赖类的实例
+    @staticmethod
+    def reset_password(token,new_password,max_age=3600):
+        s=Serializer(current_app.config["SECRET_KEY"],'confirmation')
+        # 解密
+        try:
+            data=s.loads(token.encode('utf-8'),max_age=max_age)
+        except:
+            return False
+        # get根据主键查找对象实例
+        user=User.query.get(data.get('reset'))
+        if not user:
+            return False
+        # 重设密码
+        user.password=new_password
+        db.session.add(user)
+        return True 
+```
+
+
+
+两个表单，填写邮箱和新密码
+
+```python
+class PasswordResetRequestForm(FlaskForm):
+    email=StringField('Email',validators=[DataRequired(),Length(1,64),Email()])
+    submit = SubmitField('Reset Password')
+class PasswordResetForm(FlaskForm):
+    password=PasswordField('Password',validators=[DataRequired(),EqualTo('password2',\
+        message='Passwords must match')])
+    password2=PasswordField('Password2',validators=[DataRequired(),])
+    submit=SubmitField('Reset Password')
+```
+
+
+
+视图函数
+
+```python
+@auth.route('/reset/<token>',methods=['POST','GET'])
+def password_reset(token):
+    # 已经登录不需要重设密码
+    if not current_user.is_anonymous:
+        return redirect(url_for('main.index'))
+    form=PasswordResetForm()
+    if form.validate_on_submit():
+        # token通过验证，提交修改
+        if User.reset_password(token, form.password.data):
+            db.session.commit()
+            flash('Your password has been updated.')
+            return redirect(url_for('auth.login'))
+        else:
+            flash('Update fail ')
+            return redirect(url_for('main.index'))
+    return render_template('auth/reset_password.html',form=form)
+```
+
+
+
+## 邮箱修改
+
+![image-20250417125132917](./assets/image-20250417125132917.png)
+
+邮件修改在已经登陆的状态下进行，大致流程和修改密码差不多
+
+对新地址要发送邮件确认，token中携带新邮件的地址，处于登录状态下(原地址)点击确认地址可以修改邮件地址
+
+```python
+class User(db.Model,UserMixin):   
+    def generate_email_change_token(self,new_email):
+        s=Serializer(current_app.config["SECRET_KEY"],'confirmation')
+        # 携带新邮件的地址
+        return s.dumps({'change_email':self.id,'new_email':new_email})
+    def change_email(self,token):
+        # 解密
+        s=Serializer(current_app.config["SECRET_KEY"],'confirmation')
+        try:
+            data=s.loads(token.encode('utf-8'))
+        except:
+            return False
+		#当前登录的用户不是要修改的用户
+        if data.get('change_email')!=self.id:
+            return False
+        # 没有携带
+        new_email=data.get('new_email')
+        if not new_email:return False
+	   # 新邮件地址已经存在
+        if self.query.filter_by(email=new_email).first():return False
+		
+        # 修改
+        self.email=new_email
+        db.session.add(self)
+        return True
+```
+
+
+
+添加表单
+
+```python
+class ChangeEmailForm(FlaskForm):
+    email=StringField('New Email',validators=[DataRequired(),Length(1,64),Email()])
+    password=PasswordField('Password',validators=[DataRequired()])
+    submit = SubmitField('Update Email Addressrd')
+	
+    # 自定义验证方式
+    def Validata_email(self,field):
+        if User.query.filter_by(email=field.email.data).first():
+            raise ValidationError('Email already registered.')
+```
+
+
+
+路由函数
+
+```python
+@auth.route('/change_email',methods=['POST','GET'])
+@login_required
+def change_email_request():
+    form=ChangeEmailForm()
+    # 填写表单
+    if form.validate_on_submit():
+        # 验证密码
+        if current_user.verify_password(form.password.data):
+            new_email=form.email.data
+            # 生成token
+            token=current_user.generate_email_change_token(new_email)
+            # 发送邮件
+            send_email(new_email,'Confirm your email address','auth/email/change_email',user=current_user,token=token)
+            flash('An email with instructions to confirm your new email address has been sent to you.')
+            return redirect(url_for('main.index'))
+    else:
+        flash('Invalid email or password.')
+    return render_template('auth/change_email.html',form=form)
+
+
+@auth.route('/change_email/<token>',methods=['POST','GET'])
+@login_required
+def change_email(token):
+    # 验证并修改
+    if current_user.change_email(token):
+        db.session.commit()
+        flash('You email address has been updated')
+    else:
+        flash('Invalid request')
+    return redirect(url_for('main.index'))
+```
+
+
+
+
 
