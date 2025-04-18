@@ -180,6 +180,38 @@ pip install python-dotenv
 
 
 
+## 依赖
+
+项目中需要生成依赖文件
+
+```python
+pip freeze > requirements.txt
+```
+
+在开发模式下有些依赖是用于测试的不应加入到生产模式下，因此需要区分依赖文件
+
+![image-20250418125736034](./assets/image-20250418125736034.png)
+
+
+
+共有的依赖存放在common中，在其他文件中导入
+
+```python
+-r common.txt
+```
+
+
+
+```python
+# 生产环境
+pip install -r requirements/base.txt
+
+# 开发环境
+pip install -r requirements/dev.txt
+```
+
+
+
 
 
 ## 上下文
@@ -378,7 +410,7 @@ Jinja2用于将python中的数据和逻辑渲染到HTML(txt也可以)模板中
 
 
 
-模板进程
+模板继承
 
 在base.html中放置block，block的名称自定义
 
@@ -390,13 +422,13 @@ Jinja2用于将python中的数据和逻辑渲染到HTML(txt也可以)模板中
 
 <img src="./assets/image-20250411102708596.png" alt="image-20250411102708596" style="zoom:67%;" />
 
-最后通过render_template渲染同时传入参数
+最后通过render_template渲染同时传入参数，render_template默认从templates文件夹下寻找Html，子模版同时继承父模板引入的CSS，JS文件
 
 ```python
 return render_template('index.html', name=name)
 ```
 
-render_template默认从templates文件夹下寻找内容
+
 
 
 
@@ -411,6 +443,40 @@ base.html
 child.html
 
 ![image-20250411105510035](./assets/image-20250411105510035.png)
+
+
+
+对于重复使用的html片段，可以单独保存为一个文件，然后在需要用到的地方引入，可以继承调用模板的变量
+
+```python
+{% include 'example.html' %}
+```
+
+
+
+除了include，模板复用还可以使用宏，宏可以传入参数
+
+```python
+{% macro pagination_widget(pagination, endpoint) %}
+    <!-- 动态生成分页控件 HTML -->
+{% endmacro %}
+```
+
+使用如下
+
+```python
+{% import "_macros.html" as macros %}
+
+{% if pagination %}
+<div class="pagination">
+    {{ macros.pagination_widget(pagination, '.index') }}
+</div>
+{% endif %}
+```
+
+
+
+
 
 
 
@@ -2056,7 +2122,7 @@ class EditProfileForm(FlaskForm):
             raise ValidationError('Username already registered.')
 ```
 
-
+![](./assets/image-20250418110542063.png)
 
 资料编辑路由
 
@@ -2118,7 +2184,7 @@ class EditProfileAdminForm(FlaskForm):
             raise ValidationError('Username already in user')
 ```
 
-
+<img src="./assets/image-20250418113129396.png" alt="image-20250418113129396" style="zoom:67%;" />
 
 管理员路由
 
@@ -2160,7 +2226,7 @@ def edit_profile_admin(id):
 
 头像使用Gravatar（基于邮箱地址生成头像）提供的服务，用户在Gravatar注册账户上传头像，所有支持Gravatar的网站就可以通过用户的邮箱地址（经过MD5哈希处理）生成Gravatar的URL，指向用户的头像
 
-
+![image-20250418110554467](./assets/image-20250418110554467.png)
 
 MD5哈希处理
 
@@ -2212,4 +2278,286 @@ class User(db.Model,UserMixin):
         hash=self.avatar_hash or self.gravatar_hash()
         return f'{url}/{hash}?s={size}&d={default}&r={rating}'
 ```
+
+
+
+
+
+# 博客文章
+
+## 显示博客
+
+创建博客模型
+
+```python
+class Post(db.model):
+    __tablename__='posts'
+    id=db.Column(db.Integer,primary_key=True) # 属性
+    body=db.Column(db.Text)
+    timestamp=db.Column(db.DateTime,index=True ,default=datetime.now(timezone.utc))
+    author_id=db.Column(db.Integer,db.ForeignKey('users.id'))
+    
+class User(UserMixin, db.Model):
+ 	# ...
+	posts = db.relationship('Post', backref='author', lazy='dynamic')
+```
+
+
+
+表单
+
+```python
+class PostForm(FlaskForm):
+    body=TextAreaField("What's on your mind?",validators=[DataRequired()])
+    submit=SubmitField('Submit')
+```
+
+
+
+博客首页的路由
+
+```python
+@main.route('/',methods=['GET','POST'])
+def index():
+    form=PostForm()
+    if form.validate_on_submit():
+        # 使用_get_current_object，是因为current_user只是个代理对象而不是实例
+        post=Post(body=form.body.data,author=current_user._get_current_object())
+        db.session.add(post)
+        db.session.commit()
+        return redirect(url_for('main.index'))
+    # 按照时间降序，显示所有文章
+    posts=Post.query.order_by(Post.timestamp.desc()).all()
+    return render_template('index.html',form=form,posts=posts)
+```
+
+![image-20250418153828610](./assets/image-20250418153828610.png)
+
+## 分页显示
+
+首先要创建一个包含大量数据的测试数据库，使用faker生成随机数据填充到数据库中
+
+```python
+from random import randint
+from sqlalchemy.exc import IntegrityError
+from faker import Faker
+from . import db
+from .models import User,Post
+
+def user(count=100):
+    fake=Faker()
+    i=0
+    while i<count:
+        u=User(email=fake.email(),
+               username=fake.user_name(),
+               password='password',
+               confirmed=True,
+               name=fake.name(),
+               location=fake.city(),
+               about_me=fake.text(),
+               member_since=fake.past_date())
+        db.session.add(u)
+        try:
+            db.session.commit()
+            i+=1
+        except IntegrityError: # 违反了数据库的约束，因为邮件和用户名是随机生成的有可能的重复
+            # 撤销更改
+            db.session.rollback()
+
+def posts(count=100):
+    fake=Faker()
+    user_count=User.query.count()
+    for i in range(count):
+        # offset跳过多少条记录，与randint一起使用相等于随机选择用户
+        u=User.query.offset(randint(0,user_count-1)).first()
+        p=Post(body=fake.text(),timestamp=fake.past_date(),author=u)
+        db.session.add(p)
+    db.session.commit()
+```
+
+
+
+执行shell命令创建数据
+
+![image-20250418133233851](./assets/image-20250418133233851.png)
+
+
+
+如果要分页的话就不能直接返回文章，而是要调用Flask-SQLAlchemy提供的paginate()方法
+
+```python
+# 对查询的结果进行分页，paginate接受当前的页，per_page每页个数，error_out页数超出时只会返回空页面
+    pagination=Post.query.order_by(Post.timestamp.desc()).paginate(
+        page,per_page=current_app.config['FLASKY_POSTS_PER_PAGE'],
+        error_out=False
+    )
+
+```
+
+paginate() 方法的返回值是一个Pagination类对象
+
+![image-20250418134709764](./assets/image-20250418134709764.png)
+
+
+
+![image-20250418134733737](./assets/image-20250418134733737.png)
+
+![image-20250418153546049](./assets/image-20250418153546049.png)
+
+
+
+使用宏进行分页的渲染
+
+```html
+{% macro pagination_widget(pagination, endpoint) %}
+<ul class="pagination">
+    <li{% if not pagination.has_prev %} class="disabled"{% endif %}>
+        <a href="{% if pagination.has_prev %}{{ url_for(endpoint, page=pagination.prev_num, **kwargs) }}{% else %}#{% endif %}">
+            &laquo;
+        </a>
+    </li>
+    {% for p in pagination.iter_pages() %}
+        {% if p %}
+            {% if p == pagination.page %}
+            <li class="active">
+                <a href="{{ url_for(endpoint, page = p, **kwargs) }}">{{ p }}</a>
+            </li>
+            {% else %}
+            <li>
+                <a href="{{ url_for(endpoint, page = p, **kwargs) }}">{{ p }}</a>
+            </li>
+            {% endif %}
+        {% else %}
+        <li class="disabled"><a href="#">&hellip;</a></li>
+        {% endif %}
+    {% endfor %}
+    <li{% if not pagination.has_next %} class="disabled"{% endif %}>
+        <a href="{% if pagination.has_next %}{{ url_for(endpoint, page=pagination.next_num, **kwargs) }}{% else %}#{% endif %}">
+            &raquo;
+        </a>
+    </li>
+</ul>
+{% endmacro %}
+
+```
+
+
+
+## 支持富文本
+
+安装扩展
+
+
+
+```python
+pip install flask-pagedown markdown bleach
+```
+
+
+
+Flask-PageDown为Flask应用提供了markdown编辑器支持，用户可以方便的写作Markdown格式的内容，然后在浏览器中呈现为HTML
+
+首先要导入并初始化
+
+```python
+from flask import Flask
+from flask_pagedown import PageDown
+
+app = Flask(__name__)
+pagedown = PageDown(app)
+```
+
+
+
+将文本框换为PageDown提供的PagedownField
+
+```python
+class PostForm(FlaskForm):
+    body=PageDownField("What's on your mind?",validators=[DataRequired()])
+    submit=SubmitField('Submit')
+```
+
+
+
+在用到PageDown的页面导入宏
+
+```python
+{%block scripts %}
+{{super()}}
+{{pagedown.include_pagedown()}}
+{%endblock%}
+```
+
+![image-20250418153520964](./assets/image-20250418153520964.png)
+
+
+
+这样存入数据库的内容就是markdown格式的，但是发布的帖子的内容需要时html格式，为了避免每次都做转换，在模型中进行一次性转换。
+
+```python
+class Post(db.Model):
+	body_html=db.Column(db.Text)
+
+    @staticmethod
+    def on_change_body(target,value,oldvalue,initiator):
+        # HTML中允许出现的标签
+        allowed_tags=['a', 'abbr', 'acronym', 'b', 'blockquote', 'code',
+                        'em', 'i', 'li', 'ol', 'pre', 'strong', 'ul',
+                        'h1', 'h2', 'h3', 'p']
+        '''markdown()将markdown内容转换为html
+            bleach.clean()清理HTML内容，过滤和清晰不安全的HTML，strip控制是否完全删除不允许的标签和其内容
+            bleach.linkify()将文本中的URL自动转换为<a>标签
+        '''
+        target.body_html=bleach.linkify(bleach.clean(
+            markdown(value,output_format='html'),tags=allowed_tags,strip=True
+        )) 
+        
+# 注册了一个事件监听器，监听set操作，如果修改了body内容则触发on_change_body
+db.event.listen(Post.body,'set',Post.on_change_body)
+```
+
+
+
+在模板中渲染时，用|safe防止html被转义为文本
+
+```python
+{% if post.body_html %}
+{{ post.body_html | safe }}
+{% else %}
+{{ post.body }}
+{% endif %}
+```
+
+
+
+
+
+## 修改文章
+
+在渲染文章时带上文章ID，然后添加编辑按钮，在路由函数中处理
+
+```python
+@main.route('/edit/<int:id>',methods=['GET','POST'])
+@login_required
+def edit(id):
+    post=Post.query.get_or_404(id)
+    # 只有管理员或文章作者才能修改文章
+    if current_user!=post.author and not current_user.can(Permission.ADMIN):
+        abort(403)
+    form=PostForm()
+    if form.validate_on_submit():
+        post.body=form.body.data
+        db.session.add(post)
+        db.session.commit()
+        flash('The post has been updated')
+        return redirect(url_for('mina.post',id=post.id))
+    form.body.data=post.body
+    return render_template('edit_post.html',form=form)
+```
+
+![image-20250418153435224](./assets/image-20250418153435224.png)
+
+
+
+
 
