@@ -567,6 +567,23 @@ class InfoForm(FlaskForm):
 
 ![image-20250411132215826](./assets/image-20250411132215826.png)
 
+
+
+下拉框，choices的元组(值，显示的文本)
+
+```python
+class EditProfileForm(FlaskForm):
+    gender = SelectField('Gender', 
+                         choices=[('M', 'Male'), 
+                                  ('F', 'Female'), 
+                                  ('O', 'Other')],
+                         default='M',
+                         validators=[DataRequired()])
+
+```
+
+
+
 邮件验证器需要安装扩展
 
 ```python
@@ -824,6 +841,9 @@ users = db.session.query(User).filter(User.age > 18, User.username == 'john').al
 
 # 排序
 users = db.session.query(User).order_by(User.age.desc()).all()
+
+# 简化的查询方式
+users = User.query.filter(User.name == 'Alice').all()
 ```
 
 
@@ -1378,6 +1398,12 @@ def login():
         flash('Invalid username or password')
     return render_template('auth/login.html',form=form)
 ```
+
+
+
+**登录：** 用户在成功登录后，`current_user` 会被赋值为对应的 `User` 实例。此时，`current_user.is_authenticated` 为 `True`，表示用户已经登录。登陆后的用户ID会被存储到会话中，然后每次请求时，Flask-login会根据会话中的ID查找User对象，将其赋予current_user对象。
+
+**登出：** 当用户登出时，Flask-Login 会清除 `current_user`，并将其设置为匿名用户（即 `AnonymousUserMixin`）。此时，`current_user.is_authenticated` 为 `False`，表示用户未登录。
 
 
 
@@ -1968,7 +1994,222 @@ def for_moderators_only():
 
 
 
+# 用户资料
 
 
 
+## 资料信息
+
+
+
+```python
+class User(db.Model,UserMixin):
+	...
+
+    location=db.Column(db.String(64))
+    about_me=db.Column(db.Text())
+    member_since=db.Column(db.DateTime(),default=datetime.now(timezone.utc))
+    last_seen=db.Column(db.DateTime(),default=datetime.now(timezone.utc))
+    
+    # 刷新用户最后访问时间
+    def ping(self):
+        self.last_seen=datetime.now(timezone.utc)
+        db.session.add(self)
+        db.session.commit()
+```
+
+
+
+```python
+# 注意虽然是在auth蓝图下，但是会被全局触发
+@auth.before_app_request
+def before_request():
+    # 已登录未确认，不在访问验证蓝图，也不是对静态文件的请求，则拦截
+    if current_user.is_authenticated:
+        # 更新用户登录状态
+        current_user.ping()
+        if not current_user.confirmed \
+        and request.blueprint != 'auth' \
+        and request.endpoint != 'static':
+            return redirect(url_for('auth.unconfirmed'))
+```
+
+
+
+## 资料编辑器
+
+资料编辑器分为用户级别编辑器和管理员级别编辑器
+
+
+
+资料编辑表单
+
+```python
+class EditProfileForm(FlaskForm):
+    name=StringField('Real name ',validators=[Length(0,64)])
+    location=StringField('Location',validators=[Length(0,64)])
+    about_me=TextAreaField('About me ')
+    submit=SubmitField('Submit')
+
+    def validate_name(self,field):
+        if User.query.filter_by(username=field).first():
+            raise ValidationError('Username already registered.')
+```
+
+
+
+资料编辑路由
+
+```python
+@main.route('/edit-profile',methods=['POST','GET'])
+@login_required
+def edit_profile():
+    form=EditProfileForm()
+    if form.validate_on_submit():
+        current_user.name=form.name.data
+        current_user.location=form.location.data
+        current_user.about_me=form.about_me.data
+        db.session.add(current_user)
+        db.session.commit()
+        flash('Your profile has been updated.')
+        # 返回到用户资料页面
+        return redirect(url_for('main.user',username=current_user.username))
+    form.name.data=current_user.name
+    form.location.data=current_user.location
+    form.about_me.data=current_user.about_me
+    return render_template('edit_profile.html',form=form)
+```
+
+
+
+
+
+
+
+管理员表单，管理员可以修改更多的内容
+
+```python
+class EditProfileAdminForm(FlaskForm):
+    email=StringField('Email',validators=[DataRequired(),Length(1,64),Email()])
+    username=StringField('Username',validators=[DataRequired(),Length(1,64)\
+            ,Regexp('^[A-Za-z][A-Za-z0-9_.]*$',0,'Usernames must have only letters, numbers, dots or underscores')])
+    confirmed=BooleanField('Confirmed')
+    # 修改权限，权限从模型中动态获取
+    role=SelectField('Role',coerce=int)
+    name=StringField('Real name ',validators=[Length(0,64)])
+    location=StringField('Location',validators=[Length(0,64)])
+    about_me=TextAreaField('About me ')
+    submit=SubmitField('Submit')
+
+    def __init__(self,user,*args,**kwargs):
+        super(EditProfileAdminForm,self).__init__(*args,**kwargs)
+        # 动态加载role，因为role模型可能会改变
+        self.role.choices=[(role.id,role.name) for role in Role.query.order_by(Role.name).all()]
+        self.user=user
+    
+    def validate_email(self, field):
+        if field.data != self.user.email and \
+        User.query.filter_by(email=field.data).first():
+            raise ValidationError('Email already registered.') 
+    
+    def validate_username(self, field):
+        if field.data != self.user.username and \
+        User.query.filter_by(username=field.data).first():
+            raise ValidationError('Username already in user')
+```
+
+
+
+管理员路由
+
+```python
+@main.route('/edit-profile/<int:id>',methods=['POST','GET'])
+@login_required
+@admin_required
+def edit_profile_admin(id):
+    # 首先要找到用户
+    user=User.query.get_or_404(id)
+    form=EditProfileAdminForm(user=user)
+    if form.validate_on_submit():
+        user.email=form.email.data
+        user.username=form.username.data
+        user.confirmed=form.confirmed.data
+        user.role=Role.query.get(form.role.data)
+        user.name=form.name.data
+        user.location=form.location.data
+        user.about_me=form.about_me.data
+        db.session.add(user)
+        db.session.commit()
+        flash('Your profile has been updated.')
+        # 返回到用户资料页面
+        return redirect(url_for('main.user',username=user.username))
+    form.name.data=user.name
+    form.location.data=user.location
+    form.about_me.data=user.about_me
+    form.email.data=user.email
+    form.username.data=user.username
+    form.confirmed.data=user.confirmed
+    form.role.daa=user.role_id
+
+    return render_template('edit_profile.html',form=form,user=user)
+```
+
+
+
+## 用户头像
+
+头像使用Gravatar（基于邮箱地址生成头像）提供的服务，用户在Gravatar注册账户上传头像，所有支持Gravatar的网站就可以通过用户的邮箱地址（经过MD5哈希处理）生成Gravatar的URL，指向用户的头像
+
+
+
+MD5哈希处理
+
+```python
+# 字符串需先编码为字节，获取十六进制的哈希值
+hash=hashlib.md5(self.email.lower().encode('utf-8')).hexdigest()
+```
+
+
+
+Gravatar的URL参数
+
+![image-20250418103047910](./assets/image-20250418103047910.png)
+
+
+
+
+
+计算md5值较为耗时，因此最好将其存储在User模型中
+
+```python
+class User(db.Model,UserMixin):
+    avatar_hash=db.Column(db.String(32))
+    def __init__(self,**kwargs):
+        ....
+        if self.email and not self.avatar_hash:
+            self.avatar_hash=self.gravatar_hash()
+            
+    def change_email(self,token):
+        ....
+        self.email=new_email
+        self.avatar_hash=self.gravatar_hash()
+        db.session.add(self)
+        return True
+    
+    # 生成哈希值
+    def gravatar_hash(self):
+        return hashlib.md5(self.email.lower().encode('utf-8')).hexdigest()
+    
+    # 构造请求网址
+    def gravatar(self,size=100,default='identicon',rating='g'):
+        # https和http请求不同的网址
+        if request.is_secure:
+            url='https://secure.gravatar.com/avatar'
+        else:
+            url='http://www.gravatar.com/avatar'
+
+        # 如果没有哈希值则生成
+        hash=self.avatar_hash or self.gravatar_hash()
+        return f'{url}/{hash}?s={size}&d={default}&r={rating}'
+```
 
