@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <title>欢迎邮件</title>
+</head>
+
+<body>
+    {% if user %}
+    <p>亲爱的 <strong>{{ user.username }}</strong>，</p>
+    <p>欢迎来到 <strong>Flasky</strong>！</p>
+    {% else %}
+    <p>亲爱的用户，</p>
+    <p>欢迎来到 <strong>Flasky</strong>！</p>
+    {% endif %}
+
+    <p>欢迎来到 <strong>Flasky</strong>！</p>
+
+    <p>请点击以下链接以确认您的账户：</p>
+
+    {% if url %}
+    <p><a href="{{ url }}">{{ url }}</a></p>
+
+    {% else %}
+    <p>如果您并没有注册这个账户，请忽略此邮件。</p>
+
+    {% endif %}
+    <p>祝好，<br>Flasky 团队</p>
+</body>
+
+</html>

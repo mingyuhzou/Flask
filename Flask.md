@@ -454,7 +454,7 @@ child.html
 
 
 
-除了include，模板复用还可以使用宏，宏可以传入参数
+除了include，模板复用还可以使用宏，宏可以传入参数，宏可以接收未定义的参数将其置于**kwargs，用于传入到内部的url_for
 
 ```python
 {% macro pagination_widget(pagination, endpoint) %}
@@ -2556,6 +2556,146 @@ def edit(id):
 ```
 
 ![image-20250418153435224](./assets/image-20250418153435224.png)
+
+
+
+
+
+
+
+# 关注者
+
+用户之间的关注，好友，联系人，伙伴等关系需要用多对多关系实现，原理见数据库笔记
+
+
+
+这里的多对多关系较为特殊，因为只有一个模型，用户到用户，因此是自引用关系
+
+**![image-20250419084552946](./assets/image-20250419084552946.png)**
+
+
+
+使用一张关系表以及两张一对多的表
+
+```python
+class Follow(db.Model):
+    __tablename__='follows'
+    follower_id=db.Column(db.Integer,db.ForeignKey('Users.id'),primary_key=True) # 关注者
+    followed_id=db.Column(db.Integer,db.ForeignKey('Users.id'),primary_key=True) # 被关注的人
+    timestamp=db.Column(db.DateTime,default=datetime.now(timezone.utc))
+
+class User(db.Model,UserMixin):
+
+    followed=db.relationship('Follow',foreign_key=[Follow.follower_id],backref=db.backref('follower',lazy='joined'),
+                             lazy='dynamic',cascade='all, delete-orphan')# 被我关注的人的ID 从User到关系表，就转换为了关注者(follower_id)
+    followers=db.relationship('Follow',foreign_key=[Follow.followed_id],backref=db.backref('followed',lazy='joined'),
+                             lazy='dynamic',cascade='all, delete-orphan')# 关注我的人的ID 从User到关系表，就转换为被关注者()
+    
+    # 辅助方法，关注别人
+    def follow(self,user):
+        if not self.is_following(user):
+            f=Follow(follower=self,followed=user)
+            db.session.add(f)
+    # 取消关注
+    def unfollow(self,user):
+        f=self.followed.filter_by(followed_id=user.id).first()
+        if f:
+            db.session.delete(f)
+    # 是否关注
+    def is_following(self,user):
+        if user.id is None:
+            return False
+        return self.followed.filter_by(
+            followed_id=user.id).first() is not None 
+    # 是否被关注
+    def is_followed_by(self,user):
+        if user.id is None:
+            return False
+        return self.followers.filter_by(
+            follower_id=user.id).first() is not None
+
+```
+
+
+
+
+
+![image-20250419222907384](./assets/image-20250419222907384.png)
+
+![image-20250419222913636](./assets/image-20250419222913636.png)
+
+![image-20250419222921141](./assets/image-20250419222921141.png)
+
+
+
+## 联结操作
+
+为了得到用户所关注的用户发表的文章，需要进行两次操作，一次查找用户关注的对象，第二次查找这些对象发表的文章，但是随着数据库不断变大，查找的工作量也不断增长，这种问题称为N+1，对于数据库查询最好的方法是一次完成，因此需要用到联结操作——查询结果中合并多个表的数据
+
+```python
+ class User(db.Model,UserMixin):
+    # 将方法定义为属性
+    @property
+    def followed_posts(self):
+        return Post.query.join(Follow,Follow.followed_id==Post.author_id).filter(Follow.follower_id==self.id)
+```
+
+
+
+## 显示关注的人
+
+在渲染主页时，根据cookie的值显示不同的文章，主页建立两个选项卡分别调用路由来设置cookie
+
+```python
+@main.route('/all')
+@login_required
+def show_all():
+    # cookie只能在响应对象中设置
+    resp=make_response(redirect(url_for('main.index')))
+    # set_cookie接收cookie的名称和值，以及过期时间
+    resp.set_cookie('show_followed','',max_age=30*24*3600)
+    return resp
+
+@main.route('followed')
+@login_required
+def show_followed():
+    resp=make_response(redirect(url_for('main.index')))
+    resp.set_cookie('show_followed','1',max_age=30*24*3600)
+    return resp
+
+
+@main.route('/', methods=['GET', 'POST'])
+def index():
+    form = PostForm()
+    if current_user.can(Permission.WRITE) and form.validate_on_submit():
+        post = Post(body=form.body.data,
+                    author=current_user._get_current_object())
+        db.session.add(post)
+        db.session.commit()
+        return redirect(url_for('.index'))
+    page = request.args.get('page', 1, type=int)
+    show_followed = False
+    if current_user.is_authenticated:
+        show_followed = bool(request.cookies.get('show_followed', ''))
+    if show_followed:
+        query = current_user.followed_posts
+    else:
+        query = Post.query
+    pagination = query.order_by(Post.timestamp.desc()).paginate(
+        page=page, per_page=current_app.config['FLASKY_POSTS_PER_PAGE'],
+        error_out=False)
+    posts = pagination.items
+    return render_template('index.html', form=form, posts=posts,
+                           show_followed=show_followed, pagination=pagination) 
+```
+
+
+
+
+
+
+
+
 
 
 
