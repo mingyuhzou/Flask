@@ -103,6 +103,8 @@ class User(db.Model,UserMixin):
     followers=db.relationship('Follow',foreign_keys=[Follow.followed_id],backref=db.backref('followed',lazy='joined'),
                              lazy='dynamic',cascade='all, delete-orphan')# 关注我的人的ID 从User到关系表，就转换为被关注者()
     
+    comments=db.relationship('Comment',backref='author',lazy='dynamic')
+
 
     # 用于表示对象的字符串方法
     def __repr__(self):
@@ -271,6 +273,8 @@ class Post(db.Model):
     author_id=db.Column(db.Integer,db.ForeignKey('Users.id'))
     body_html=db.Column(db.Text)
 
+    comments=db.relationship('Comment',backref='post',lazy='dynamic')
+
     @staticmethod
     def on_change_body(target,value,oldvalue,initiator):
         # HTML中允许出现的标签
@@ -288,6 +292,28 @@ class Post(db.Model):
 # 注册了一个事件监听器，监听set操作，如果修改了body内容则触发on_change_body
 db.event.listen(Post.body,'set',Post.on_change_body)
 
+class Comment(db.Model):
+    __tablename__='comments'
+    id=db.Column(db.Integer,primary_key=True)
+    body=db.Column(db.Text)
+    timestamp=db.Column(db.DateTime,index=True ,default=datetime.now(timezone.utc))
+    author_id=db.Column(db.Integer,db.ForeignKey('Users.id'))
+    body_html=db.Column(db.Text)
+    disabled=db.Column(db.Boolean)
+    author_id=db.Column(db.Integer,db.ForeignKey('Users.id'))
+    post_id=db.Column(db.Integer,db.ForeignKey('posts.id'))
+    @staticmethod
+    def on_change_body(target,value,oldvalue,initiator):
+        # HTML中允许出现的标签
+        allowed_tags=['a', 'abbr', 'acronym', 'b', 'code', 'em', 'i','strong']
+        '''markdown()将markdown内容转换为html
+            bleach.clean()清理HTML内容，过滤和清晰不安全的HTML，strip控制是否完全删除不允许的标签和其内容
+            bleach.linkify()将文本中的URL自动转换为<a>标签
+        '''
+        target.body_html=bleach.linkify(bleach.clean(
+            markdown(value,output_format='html'),tags=allowed_tags,strip=True
+        )) 
+db.event.listen(Comment.body,'set',Comment.on_change_body)
 
 class AnonymousUser(AnonymousUserMixin):
     def can(self,perm):

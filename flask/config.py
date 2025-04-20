@@ -19,7 +19,7 @@ class Config:
     FLASKY_MAIL_SENDER = 'Flasky Admin <2228632512@qq.com>' # 发送者
     FLASKY_ADMIN=set(['mingyuhzou@gmail.com','22286325612@qq.com'])
     FLASKY_POSTS_PER_PAGE=FLASKY_FOLLOWERS_PER_PAGE=20                                 # 每页的帖子数
-
+    FLASKY_COMMENTS_PER_PAGE=10
     '''数据库设置'''
     SQLALCHEMY_DATABASE_URI='sqlite:///' + os.path.join(basedir, 'data.sqlite')
 

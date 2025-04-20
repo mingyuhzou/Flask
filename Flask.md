@@ -2689,6 +2689,70 @@ def index():
                            show_followed=show_followed, pagination=pagination) 
 ```
 
+![image-20250420092804968](./assets/image-20250420092804968.png)
+
+
+
+# 用户评论
+
+
+
+## 模型
+
+```python
+class Comment(db.Model):
+    __tablename__='comments'
+    id=db.Column(db.Integer,primary_key=True)
+    body=db.Column(db.Text)
+    timestamp=db.Column(db.DateTime,index=True ,default=datetime.now(timezone.utc))
+    author_id=db.Column(db.Integer,db.ForeignKey('Users.id'))
+    body_html=db.Column(db.Text)
+    disbale=db.Column(db.Boolean)
+    author_id=db.Column(db.Integer,db.ForeignKey('users.id'))
+    post_id=db.Column(db.Integer,db.ForeignKey('posts.id'))
+    @staticmethod
+    def on_change_body(target,value,oldvalue,initiator):
+        # HTML中允许出现的标签
+        allowed_tags=['a', 'abbr', 'acronym', 'b', 'code', 'em', 'i','strong']
+        '''markdown()将markdown内容转换为html
+            bleach.clean()清理HTML内容，过滤和清晰不安全的HTML，strip控制是否完全删除不允许的标签和其内容
+            bleach.linkify()将文本中的URL自动转换为<a>标签
+        '''
+        target.body_html=bleach.linkify(bleach.clean(
+            markdown(value,output_format='html'),tags=allowed_tags,strip=True
+        )) 
+db.event.listen(Comment.body,'set',Comment.on_change_body)
+```
+
+同时还要在User和Post中添加一对多关系
+
+修改路由函数
+
+```python
+@main.route('/post/<int:id>',methods=['GET', 'POST'])
+def post(id):
+    post=Post.query.get_or_404(id)
+    form=CommentForm()
+    if form.validate_on_submit():
+        comment=Comment(body=form.body.data,post=post,author=current_user._get_current_object())
+        db.session.add(comment)
+        db.session.commit()
+        flash('You commetnhas been published.')
+        return  redirect(url_for('main.post',id=post.id,page=-1))
+    page=request.args.get('page',1,type=int)
+    if page==-1:
+        page=(post.comments.count()-1)//current_app.config['FLASKY_COMMENTS_PER_PAGE']+1
+    pagination=post.comments.order_by(Comment.timestamp.asc()).paginate(
+        page=page,per_page=current_app.config['FLASKY_COMMENTS_PER_PAGE'],error_out=False
+    )
+    comments=pagination.items
+    return render_template('post.html',posts=[post],form=form,comments=comments,pagination=pagination)
+
+```
+
+![image-20250420092751129](./assets/image-20250420092751129.png)
+
+![image-20250420092733723](./assets/image-20250420092733723.png)
 
 
 
@@ -2696,8 +2760,45 @@ def index():
 
 
 
+## 管理评论
+
+```python
+@main.route('/moderate/enable/<int:id>')
+@login_required
+@permission_required(Permission.MODERATE)
+def moderate_enable(id):
+    comment=Comment.query.get_or_404(id)
+    comment.disabled=False
+    db.session.add(comment)
+    db.session.commit()
+
+    return redirect(url_for('main.moderate',page=request.args.get('page',1,type=int)))
+
+@main.route('/moderate/disable/<int:id>')
+@login_required
+@permission_required(Permission.MODERATE)
+def moderate_disable(id):
+    comment=Comment.query.get_or_404(id)
+    comment.disabled=True
+    db.session.add(comment)
+    db.session.commit()
+
+    return redirect(url_for('main.moderate',page=request.args.get('page',1,type=int)))
 
 
 
+@main.route('/moderate')
+@login_required
+@permission_required(Permission.MODERATE)
+def moderate():
+    page=request.args.get('page',1,type=int)
+    pagination=Comment.query.order_by(Comment.timestamp.desc()).paginate(
+        page=page,per_page=current_app.config['FLASKY_COMMENTS_PER_PAGE'],error_out=False
+    )
+    comments=pagination.items
+    return render_template('moderate.html',comments=comments,pagination=pagination,page=page)
+```
 
 
+
+![image-20250420100528296](./assets/image-20250420100528296.png)
