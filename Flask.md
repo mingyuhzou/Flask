@@ -96,6 +96,42 @@ CSRF——跨站请求伪造，恶意网站通过已认证的用户浏览器在�
 
  **CSRF防护机制**会基于secret_key生成token，服务器再生成页面时会给用户一个token，在提交时用户需要携带token一起，然后服务器会检查token是否正确，外部网站是无法访问网站页面的token。
 
+## CRUD
+
+[CRUD](https://zhida.zhihu.com/search?content_id=27137588&content_type=Answer&match_order=1&q=CRUD&zhida_source=entity) (Create/Read/Update/Delete)增删改查操作
+
+
+
+## WSGI
+
+全称Python web server Gateway interface，指定了web服务器和python web应用或web框架之间的标准接口，以提高web应用在一系列web服务器间的移植性
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # 应用基本结构
@@ -1313,6 +1349,56 @@ def make_shell_context():
 
 ```python
  pip freeze >requirements.txt
+```
+
+
+
+## 单元测试
+
+
+
+```python
+import unittest
+from flask import current_app
+from app import create_app,db
+
+class BasicTestCase(unittest.TestCase):
+    '''
+        测试前执行
+    '''
+    def setUp(self):
+        self.app=create_app('testing') # 创建falsk app
+        self.app_context=self.app.app_context() # 创建上下文
+        self.app_context.push() # 压入上下文，使得current_app可用，因为此时flask不在处理请求，不会自动加载上下文
+        db.create_all() # 创建数据库表
+    '''
+        测试后执行
+    '''
+    def tearDown(self):
+        db.session.remove() # 移除数据库会话
+        db.drop_all() # 删除所有表
+        self.app_context.pop() # 弹出上下文清理资源，压入了就必须弹出
+    def test_app_exist(self):
+        self.assertFalse(current_app is None)
+    def test_app_is_testing(self):
+        self.assertTrue(current_app.config['TESTING'])
+```
+
+
+
+自定义测试命令
+
+```python
+'''
+    注册flask test命令
+'''
+@app.cli.command()
+def test():
+    import unittest
+    # 自动加载tests/目录下所有以test*.py命名的测试模块
+    tests=unittest.TestLoader().discover('tests')
+    # 以详细模式运行测试
+    unittest.TextTestRunner(verbosity=2).run(tests)
 ```
 
 
@@ -2802,3 +2888,259 @@ def moderate():
 
 
 ![image-20250420100528296](./assets/image-20250420100528296.png)
+
+
+
+
+
+
+
+# 应用编程接口
+
+## REST
+
+
+
+REST——表现层状态转移，一种设计风格，看URL就知道请求什么，看http method就知道要做什么，看http status code就知道结果如何。
+
+右边的是**REST** 风格
+
+```url
+GET /rest/api/getDogs --> GET /rest/api/dogs 获取所有小狗狗 
+GET /rest/api/addDogs --> POST /rest/api/dogs 添加一个小狗狗 
+GET /rest/api/editDogs/:dog_id --> PUT /rest/api/dogs/:dog_id 修改一个小狗狗 
+GET /rest/api/deleteDogs/:dog_id --> DELETE /rest/api/dogs/:dog_id 删除一个小狗狗
+```
+
+
+
+比如酒店中对房间操作，各种操作对应的URL：开房/open/room/3242，退房/exit/3242/room，打理room/3242?method=clean，在REST架构下房间的URL就是/room/3242 ，而操作取决于http method		
+
+
+
+REST的特点如下：
+
++ 一切都是资源
++ URL中通常只有名词
++ URL语义清晰明确
++ 数据的载体是JSON
++ 使用HTTP动词表示增删改查资源， GET：查询，POST：新增，PUT：更新，DELETE：删除
++ 无状态，每一个请求都是独立的，完整的
+
+
+
+如果想要手机上能浏览网页就需要REST架构
+
+
+
+
+
+# 测试
+
+## 代码覆盖度报告
+
+可以检测单元测试覆盖了应用的多少功能，可以说明那些代码没有被检测到
+
+```python
+pip install coverage
+```
+
+
+
+
+
+```python
+'''
+    开启代码覆盖统计，要在app创建之前，否则不会统计到模块
+'''
+COV=None
+if os.environ.get('FLASK_COVERAGE'):
+    import coverage
+
+    # branch检测分支 include只对app/目录下的代码做覆盖率检测
+    COV=coverage.coverage(branch=True,include='app/*')
+    # 开始检测
+    COV.start()
+...
+
+'''
+    注册flask test命令
+    --coverage 统计代码覆盖率并生成html报告
+'''
+@app.cli.command()
+@click.option('--coverage/--no-coverage',default=False,help='Run tests under code coverage.')
+def test(coverage):
+    # 如果指定了coverage参数，但是没有环境变量中没有FLASK_COVERAGE就设置
+    if coverage and not os.environ.get('FLASK_COVERAGE'):
+        os.environ['FLASK_COVERAGE']='1'
+        # 需要重新运行程序否则不会统计到已经加载了的views，modelsma,pp模块
+        os.execvp(sys.executable, [sys.executable]+[sys.argv[0]+".exe"]+sys.argv[1:])
+    
+    import unittest
+    # 自动加载tests/目录下所有以test*.py命名的测试模块
+    tests=unittest.TestLoader().discover('tests')
+    # 以详细模式运行测试
+    unittest.TextTestRunner(verbosity=2).run(tests)
+    
+    # 停止统计，此时各个模块已经导入完毕
+    if COV:
+        COV.stop()
+        COV.save()
+        print('Coverage Summary:')
+        COV.report()
+        basedir=os.path.abspath(os.path.dirname(__file__))
+        covdir=os.path.join(basedir,'tmp/coverage')
+
+        # 生成html报告
+        COV.html_report(directory=covdir)
+        print(f'HTML version: file:///{covdir.replace(os.sep, "/")}/index.html')
+        # 清除统计数据
+        COV.erase() 
+```
+
+
+
+
+
+
+
+
+
+
+
+# 性能
+
+## 记录影响性能的缓慢数据库查询
+
+Flask-SQLAlchemy 提供了一个选项，可以记录一次请求中与数据库查询有关的统计数据
+
+![image-20250420151304427](./assets/image-20250420151304427.png)
+
+
+
+# 部署
+
+
+
+首先编写dockerfile
+
+```python
+# 指定基础镜像 即新镜像基于谁来构建 
+FROM python:3.11-alpine
+
+ENV FLASK_APP=run.py
+ENV FLASK_CONFIG=docker
+
+# 创建新用户 -D默认选项——不设置密码不询问交互信息
+RUN adduser -D flasky
+
+# 接下来用户操作都以flasky用户身份执行，一般不以root身份执行保证安全性
+USER flasky
+
+# 设置容器内的工作目录，后续的所有指令(RUN CMD COPY都会基于这个文件工作)，该目录位于DOCKER容器内部的虚拟文件系统
+WORKDIR /app
+
+COPY requirements requirements
+
+# RUN是构建镜像时执行的命令
+
+# 创建虚拟环境
+RUN python -m venv venv 
+# 安装依赖
+RUN venv/bin/pip install -r requirements/docker.txt
+
+COPY app app 
+COPY migrations migrations
+# 复制多个到当前目录下
+COPY run.py config.py boot.sh ./
+
+
+# 声明要监听的端口
+EXPOSE 5000
+# 容器启动时要运行的脚本
+ENTRYPOINT [ "./boot.sh" ]
+```
+
+
+
+编写脚本 
+
+```bash
+#!/bin/sh
+. venv/bin/activate
+flask deploy
+exec gunicorn -b 0.0.0.0:5000 --access-logfile - --error-logfile - run:app
+```
+
+
+
+指定脚本解释器
+
+```bash
+#!/bin/sh
+```
+
+
+
+激活python虚拟环境
+
+```bash
+. venv/bin/activate
+```
+
+
+
+执行自定义命令 数据库迁移，数据库初始化
+
+```python
+flask deploy
+```
+
+run.py
+
+```python
+@app.cli.command()
+def deploy():
+    print("开始部署！")
+    # 执行数据库迁移
+    upgrade()
+    # 插入角色
+    print("插入角色...")
+    Role.insert_roles()
+    User.add_self_follows()
+```
+
+
+
+使用 Gunicorn 启动 Flask 应用，监听 5000 端口，`--access-logfile -`访问日志输出到标准输出，--error-logfile 错误日志输出到标准错误，从`run.py` 中加载 `app` 变量作为应用实例
+
+```python
+exec gunicorn -b 0.0.0.0:5000 --access-logfile - --error-logfile - run:app
+```
+
+
+
+Gunicorn是一个python WISG HTTP 服务器，用于生产环境部署Flask应用，flask run则是开发用的，相比于Gunicorn不稳定不安全。
+
+
+
+运行
+
+```python
+docker run --name flasky -d -p 8000:5000 \
+ -e SECRET_KEY=57d40f677aff4d8d96df97223c74d217 \
+ -e MAIL_USERNAME=<your-gmail-username> \
+ -e MAIL_PASSWORD=<your-gmail-password> flasky:latest
+```
+
++ --name 设置容器的名称
++ -d 设置后台运行
++ -p 设置端口映射，将运行机器的8000端口映射到5000，flask应用一般监听5000端口
++ -e设置环境变量
+
+
+
+在本地输入localhost:5000即可访问
+
+
+
