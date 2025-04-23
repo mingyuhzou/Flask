@@ -3122,6 +3122,20 @@ exec gunicorn -b 0.0.0.0:5000 --access-logfile - --error-logfile - run:app
 
 Gunicorn是一个python WISG HTTP 服务器，用于生产环境部署Flask应用，flask run则是开发用的，相比于Gunicorn不稳定不安全。
 
+注意想让数据库中能建立flask中的模型必须写对migrations，最好的方法是删除开发环境下的临时数据库以及migrfations，在flask shell中db.creat_all()，然后再初始化迁移文件flask db init ....
+
+确保有如下所示的内容
+
+![image-20250423125522270](./assets/image-20250423125522270.png)
+
+
+
+提交镜像
+
+```python
+docker build -t "flasky" .
+```
+
 
 
 运行
@@ -3141,6 +3155,41 @@ docker run --name flasky -d -p 8000:5000 \
 
 
 在本地输入localhost:5000即可访问
+
+
+
+使用sqlite数据库在容器停止时，数据就会丢失，因此在应用容器之外使用mysql数据库，通过docker不需下载mysql，只用拉去mysql镜像然后运行即可
+
+使用mysql要安装依赖pymysql和cryptography，并更新依赖文件
+
+
+
+运行
+
+```bash
+docker run --name mysql -d -e MYSQL_ROOT_PASSWORD=111111 -e MYSQL_DATABASE=flasky -e MYSQL_USER=flasky -e MYSQL_PASSWORD=111111 mysql:latest
+```
+
++ --name mysql 将mysql容器命名
++ -d后台运行
++ -e MYSQL_ROOT_PASSWORD 设置数据库root用户密码
++ -e MYSQL_DATABASE 
++ -e MYSQL_DATABASE 创建一个名为flasky的数据库
++ MYSQL_USER 设置数据库用户
++ MYSQL_PASSWORD设置用户密码
++ mysql:latest 使用镜像，如果没有拉取会自动拉取
+
+
+
+flasky镜像
+
+```python
+docker run -d -p 8000:5000 --link mysql:dbserver -e DATABASE_URL=mysql+pymysql://flasky:111111@dbserver/flasky -e MAIL_USERNAME=2228632512@qq.com -e MAIL_PASSWORD=jdilyngiczeadhha flasky:latest
+```
+
++ -p 8000:5000 将flasky镜像映射到运行机的8000端口
++ --link mysql:dbserver 链接名为mysql的容器并重命名为dbserver 
++ -e DATABASE_URL 设置flasky中的环境变量
 
 
 
