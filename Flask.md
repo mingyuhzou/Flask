@@ -3022,7 +3022,7 @@ Flask-SQLAlchemy 提供了一个选项，可以记录一次请求中与数据库
 
 
 
-首先编写dockerfile
+首先编写dockerfile，设置的环境变量会覆盖.flaskenv中设置的变量
 
 ```python
 # 指定基础镜像 即新镜像基于谁来构建 
@@ -3072,29 +3072,11 @@ flask deploy
 exec gunicorn -b 0.0.0.0:5000 --access-logfile - --error-logfile - run:app
 ```
 
++ #!/bin/sh 指定脚本解释，对于不同的基础镜像需要指定不同的脚本解释器
++ . venv/bin/activate 激活python虚拟环境
++ flask deploy 执行自定义命令 数据库迁移，数据库初始化
 
 
-指定脚本解释器
-
-```bash
-#!/bin/sh
-```
-
-
-
-激活python虚拟环境
-
-```bash
-. venv/bin/activate
-```
-
-
-
-执行自定义命令 数据库迁移，数据库初始化
-
-```python
-flask deploy
-```
 
 run.py
 
@@ -3158,7 +3140,11 @@ docker run --name flasky -d -p 8000:5000 \
 
 
 
-使用sqlite数据库在容器停止时，数据就会丢失，因此在应用容器之外使用mysql数据库，通过docker不需下载mysql，只用拉去mysql镜像然后运行即可
+关键的环境变量不应写入到镜像中，需要手动配置，就像mysql——需要手动配置参数
+
+
+
+使用sqlite数据库在容器停止时，数据就会丢失，因此在应用容器之外使用mysql数据库，通过docker不需下载mysql，只用拉取mysql镜像然后运行即可。MySQL采用外部卷的方式存储数据，独立于容器的生命周期。
 
 使用mysql要安装依赖pymysql和cryptography，并更新依赖文件
 
@@ -3171,7 +3157,7 @@ docker run --name mysql -d -e MYSQL_ROOT_PASSWORD=111111 -e MYSQL_DATABASE=flask
 ```
 
 + --name mysql 将mysql容器命名
-+ -d后台运行
++ -d后台运行，不会占用当前的终端窗口
 + -e MYSQL_ROOT_PASSWORD 设置数据库root用户密码
 + -e MYSQL_DATABASE 
 + -e MYSQL_DATABASE 创建一个名为flasky的数据库
@@ -3184,7 +3170,7 @@ docker run --name mysql -d -e MYSQL_ROOT_PASSWORD=111111 -e MYSQL_DATABASE=flask
 flasky镜像
 
 ```python
-docker run -d -p 8000:5000 --link mysql:dbserver -e DATABASE_URL=mysql+pymysql://flasky:111111@dbserver/flasky -e MAIL_USERNAME=2228632512@qq.com -e MAIL_PASSWORD=jdilyngiczeadhha flasky:latest
+docker run -d -p 8000:5000 --link mysql:dbserver -e DATABASE_URL=mysql+pymysql://flasky:111111@dbserver/flasky -e MAIL_USERNAME=2228632512@qq.com -e MAIL_PASSWORD=xxx flasky:latest
 ```
 
 + -p 8000:5000 将flasky镜像映射到运行机的8000端口
@@ -3193,3 +3179,89 @@ docker run -d -p 8000:5000 --link mysql:dbserver -e DATABASE_URL=mysql+pymysql:/
 
 
 
+应用依赖于多个容器，可以使用docker-compose**一次性启动**，在根目录下配置docker-compose.yml文件
+
+```python
+services:
+  flasky:
+    build: .
+    ports:
+      - "8000:5000"
+    env_file: .env
+    depends_on:
+      - dbserver
+    restart: always
+  
+  dbserver:
+    image: "mysql:latest"
+    env_file: .env_mysql
+    restart: always
+```
+
++ services下指定服务名(容器名)
++ build . 基于当前目录向下的dockfile构建flask镜像，镜像名默认为目录名_flasky
++ image 基于的镜像的位置
++ env_file 指定环境变量的配置
++ restart: always 如果容器崩溃，那么docker总会重启它
++ depends_on 服指定服务之间的依赖关系，确保启动顺序
+
+
+
+指定环境变量参数，这些文件不应上传
+
+.env_mysql
+
+```python
+MYSQL_ROOT_PASSWORD=111111
+MYSQL_DATABASE=flasky
+MYSQL_USER=flasky
+MYSQL_PASSWORD=111111
+```
+
+
+
+.env
+
+```python
+FLASKY_APP=run.app
+FLASK_CONFIG=docker
+MAIL_USERNAME=2228632512@qq.com
+MAIL_PASSWORD=xxx
+DATABASE_URL=mysql+pymysql://flasky:111111@dbserver/flasky
+```
+
+
+
+```python
+docker-compose up --build
+```
+
++ --build会强制在启动容器之前构建build指定的镜像，保证了flask项目的更改生效
+
+
+
+
+
+虽然指定了服务的启动顺序，但mysql需要时间初始化，此时启动flask项目会导致无法连接，因此需要在boot.sh中设置
+
+```python
+#!/bin/sh
+. venv/bin/activate
+while true; do
+    flask deploy
+    if [ "$?" -eq 0 ]; then
+        break
+    fi
+    echo "Deploy command failed. Retrying in 5 sec..."
+    sleep 5
+done
+
+# 启动 gunicorn
+exec gunicorn -b 0.0.0.0:5000 --access-logfile - --error-logfile - run:app
+```
+
+让其等待数据库初始化完成
+
+
+
+<img src="./assets/image-20250424102659021.png" alt="image-20250424102659021" style="zoom:80%;" />
